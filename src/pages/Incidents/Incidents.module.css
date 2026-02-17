@@ -1,0 +1,107 @@
+.page {
+  padding: 1.5rem 2rem 3rem;
+  max-width: 1280px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.title {
+  font-size: 1.75rem;
+  font-weight: 700;
+}
+
+.subtitle {
+  display: block;
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+  margin-top: 0.25rem;
+}
+
+/* Controls */
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+/* Filter toggle group */
+.filterGroup {
+  display: flex;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.filterBtn {
+  background: none;
+  border: none;
+  border-right: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  padding: 0.35rem 0.85rem;
+  font-size: 0.8rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.filterBtn:last-child { border-right: none; }
+.filterBtn:hover { background: rgba(255,255,255,0.05); color: var(--color-text-primary); }
+.filterBtn.filterActive {
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--color-accent-blue);
+}
+
+/* Limit control */
+.limitControl {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.controlLabel {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.select {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+.select:hover { border-color: var(--color-accent-blue); }
+.select:focus { outline: 2px solid var(--color-accent-blue); outline-offset: 2px; }
+
+/* Count row */
+.countRow {
+  margin-bottom: 0.75rem;
+}
+.count {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+/* States */
+.loading {
+  padding: 3rem 0;
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}
+
+@media (max-width: 640px) {
+  .page { padding: 1rem; }
+}
