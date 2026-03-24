@@ -85,6 +85,42 @@
 .select:hover { border-color: var(--color-accent-blue); }
 .select:focus { outline: 2px solid var(--color-accent-blue); outline-offset: 2px; }
 
+.input {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  font-family: inherit;
+}
+.input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.errorWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.actionBtn {
+  width: fit-content;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+.actionBtn:hover { border-color: var(--color-accent-blue); }
+.actionBtn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 /* Count row */
 .countRow {
   margin-bottom: 0.75rem;
@@ -100,6 +136,19 @@
   text-align: center;
   color: var(--color-text-muted);
   font-size: 0.875rem;
+}
+
+.pagination {
+  margin-top: 0.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+
+.pageInfo {
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
 }
 
 @media (max-width: 640px) {

@@ -5,7 +5,7 @@ import styles from './CameraCard.module.css';
 
 /**
  * CameraCard — displays a single camera feed with polling.
- * @param {{ id: string, name: string, status: string, fps: number }} camera
+ * @param {{ id: string, status: string, stream_url?: string, last_job_id?: string, last_seen_at?: string, name?: string, fps?: number }} camera
  * @param {number} [pollInterval=5000]  — ms between frame refreshes (0 = no polling)
  */
 export default function CameraCard({ camera, pollInterval = 5000 }) {
@@ -56,7 +56,7 @@ export default function CameraCard({ camera, pollInterval = 5000 }) {
         {!loading && !error && frameUrl && (
           <img
             src={frameUrl}
-            alt={`Live feed from ${camera.name}`}
+            alt={`Live feed from ${camera.name ?? camera.id}`}
             className={styles.frame}
           />
         )}
@@ -70,11 +70,11 @@ export default function CameraCard({ camera, pollInterval = 5000 }) {
       <div className={styles.footer}>
         <div className={styles.info}>
           <span className={styles.cameraId}>{camera.id}</span>
-          <span className={styles.cameraName}>{camera.name}</span>
+          {camera.name && <span className={styles.cameraName}>{camera.name}</span>}
         </div>
         <div className={styles.meta}>
           <StatusBadge status={camera.status} />
-          {camera.status !== 'offline' && (
+          {camera.status !== 'offline' && camera.fps != null && (
             <span className={styles.fps}>{camera.fps} fps</span>
           )}
         </div>

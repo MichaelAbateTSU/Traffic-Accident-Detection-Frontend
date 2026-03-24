@@ -29,6 +29,12 @@
   font-size: 0.875rem;
 }
 
+.inlineNotice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
 /* Stats grid */
 .statsGrid {
   display: grid;
@@ -40,6 +46,12 @@
 /* Section */
 .section {
   margin-bottom: 2rem;
+}
+
+.sectionMeta {
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  margin: 0 0 0.65rem;
 }
 
 .sectionHeader {
@@ -63,6 +75,70 @@
 }
 .viewAll:hover {
   color: var(--color-text-primary);
+}
+
+.retryBtn {
+  width: fit-content;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+.retryBtn:hover {
+  border-color: var(--color-accent-blue);
+}
+.retryBtn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.jobForm {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.input,
+.inputSmall {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.65rem;
+  font-size: 0.8rem;
+  font-family: inherit;
+}
+
+.input {
+  min-width: 300px;
+}
+
+.inputSmall {
+  width: 90px;
+}
+
+.checkboxLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+}
+
+.jobStatus {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  font-size: 0.82rem;
+  color: var(--color-text-secondary);
+  margin-bottom: 0.35rem;
 }
 
 .hint {

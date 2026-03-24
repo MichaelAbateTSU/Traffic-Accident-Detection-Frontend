@@ -10,8 +10,18 @@ function confidenceClass(confidence) {
   return styles.confLow;
 }
 
+function getIncidentTimestamp(incident) {
+  return incident.timestamp ?? incident.detectedAt ?? null;
+}
+
+function getIncidentConfidence(incident) {
+  return Number(incident.confidence ?? incident.confidenceScore ?? 0);
+}
+
 function formatTimestamp(iso) {
+  if (!iso) return '—';
   const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '—';
   return date.toLocaleString(undefined, {
     month: 'short', day: 'numeric',
     hour: '2-digit', minute: '2-digit', second: '2-digit',
@@ -41,8 +51,8 @@ export default function IncidentTable({ incidents = [], compact = false }) {
   const sorted = [...incidents].sort((a, b) => {
     let va = a[sortKey];
     let vb = b[sortKey];
-    if (sortKey === 'timestamp') { va = new Date(va); vb = new Date(vb); }
-    if (sortKey === 'confidence') { va = Number(va); vb = Number(vb); }
+    if (sortKey === 'timestamp') { va = new Date(getIncidentTimestamp(a)); vb = new Date(getIncidentTimestamp(b)); }
+    if (sortKey === 'confidence') { va = getIncidentConfidence(a); vb = getIncidentConfidence(b); }
     if (va < vb) return sortDir === 'asc' ? -1 :  1;
     if (va > vb) return sortDir === 'asc' ?  1 : -1;
     return 0;
@@ -106,7 +116,7 @@ export default function IncidentTable({ incidents = [], compact = false }) {
                 </td>
               )}
               <td className={[styles.td, styles.mono].join(' ')}>
-                {formatTimestamp(incident.timestamp)}
+                {formatTimestamp(getIncidentTimestamp(incident))}
               </td>
               <td className={styles.td}>
                 <span className={styles.cameraId}>{incident.cameraId}</span>
@@ -116,8 +126,8 @@ export default function IncidentTable({ incidents = [], compact = false }) {
               </td>
               <td className={styles.td}>{incident.type}</td>
               <td className={styles.td}>
-                <span className={[styles.confidence, confidenceClass(incident.confidence)].join(' ')}>
-                  {(incident.confidence * 100).toFixed(0)}%
+                <span className={[styles.confidence, confidenceClass(getIncidentConfidence(incident))].join(' ')}>
+                  {(getIncidentConfidence(incident) * 100).toFixed(0)}%
                 </span>
               </td>
               <td className={styles.td}>

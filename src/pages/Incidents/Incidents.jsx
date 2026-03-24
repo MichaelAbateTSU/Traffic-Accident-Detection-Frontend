@@ -12,28 +12,59 @@ export default function Incidents() {
   const [error,     setError]     = useState(null);
   const [limit,     setLimit]     = useState(20);
   const [filter,    setFilter]    = useState('all'); // 'all' | 'active' | 'resolved'
+  const [page,      setPage]      = useState(1);
+  const [meta,      setMeta]      = useState(null);
+  const [sort,      setSort]      = useState('-detected_at');
+  const [cameraIdInput, setCameraIdInput] = useState('');
+  const [minConfidenceInput, setMinConfidenceInput] = useState('');
+  const [debouncedCameraId, setDebouncedCameraId] = useState('');
+  const [debouncedMinConfidence, setDebouncedMinConfidence] = useState('');
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
+    const timeout = setTimeout(() => {
+      setDebouncedCameraId(cameraIdInput.trim());
+      setDebouncedMinConfidence(minConfidenceInput.trim());
+      setPage(1);
+    }, 350);
+    return () => clearTimeout(timeout);
+  }, [cameraIdInput, minConfidenceInput]);
+
+  useEffect(() => {
+    const controller = new AbortController();
     async function load() {
       setLoading(true);
       try {
-        const data = await getIncidents(limit);
-        setIncidents(data);
+        const result = await getIncidents({
+          page,
+          pageSize: limit,
+          status: filter === 'all' ? undefined : filter,
+          minConfidence: debouncedMinConfidence ? Number(debouncedMinConfidence) : undefined,
+          cameraId: debouncedCameraId || undefined,
+          sort,
+        }, { signal: controller.signal });
+
+        setIncidents(result.items);
+        setMeta(result.meta ?? null);
         setError(null);
       } catch (err) {
+        if (err.name === 'AbortError') return;
         setError(err.message);
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     }
     load();
-  }, [limit]);
+    return () => {
+      controller.abort();
+    };
+  }, [page, limit, filter, sort, debouncedCameraId, debouncedMinConfidence, retryKey]);
 
-  const filtered = incidents.filter(i => {
-    if (filter === 'active')   return !i.resolved;
-    if (filter === 'resolved') return  i.resolved;
-    return true;
-  });
+  const pagination = meta?.pagination ?? {};
+  const totalItems = pagination.total_items ?? incidents.length;
+  const totalPages = pagination.total_pages ?? 1;
+  const hasPrev = pagination.has_prev ?? page > 1;
+  const hasNext = pagination.has_next ?? page < totalPages;
 
   return (
     <main className={styles.page}>
@@ -48,7 +79,10 @@ export default function Incidents() {
               <button
                 key={f}
                 className={[styles.filterBtn, filter === f ? styles.filterActive : ''].join(' ')}
-                onClick={() => setFilter(f)}
+                onClick={() => {
+                  setFilter(f);
+                  setPage(1);
+                }}
               >
                 {f.charAt(0).toUpperCase() + f.slice(1)}
               </button>
@@ -60,24 +94,68 @@ export default function Incidents() {
               id="limit-select"
               className={styles.select}
               value={limit}
-              onChange={e => setLimit(Number(e.target.value))}
+              onChange={(e) => {
+                setLimit(Number(e.target.value));
+                setPage(1);
+              }}
             >
               {LIMIT_OPTIONS.map(n => (
                 <option key={n} value={n}>{n}</option>
               ))}
             </select>
           </div>
+          <div className={styles.limitControl}>
+            <label htmlFor="sort-select" className={styles.controlLabel}>Sort</label>
+            <select
+              id="sort-select"
+              className={styles.select}
+              value={sort}
+              onChange={(e) => {
+                setSort(e.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="-detected_at">Newest</option>
+              <option value="detected_at">Oldest</option>
+              <option value="-confidence_score">Confidence (High-Low)</option>
+              <option value="confidence_score">Confidence (Low-High)</option>
+            </select>
+          </div>
+          <input
+            className={styles.input}
+            type="text"
+            placeholder="Camera ID"
+            value={cameraIdInput}
+            onChange={(e) => setCameraIdInput(e.target.value)}
+          />
+          <input
+            className={styles.input}
+            type="number"
+            min="0"
+            max="1"
+            step="0.01"
+            placeholder="Min confidence (0-1)"
+            value={minConfidenceInput}
+            onChange={(e) => setMinConfidenceInput(e.target.value)}
+          />
         </div>
       </div>
 
       {error && (
-        <AlertBanner type="warning" message="Failed to load incidents" detail={error} />
+        <div className={styles.errorWrap}>
+          <AlertBanner type="warning" message="Failed to load incidents" detail={error} />
+          <button type="button" className={styles.actionBtn} onClick={() => setRetryKey((v) => v + 1)}>
+            Retry
+          </button>
+        </div>
       )}
 
       <div className={styles.countRow}>
         {!loading && (
           <span className={styles.count}>
-            Showing <strong>{filtered.length}</strong> of <strong>{incidents.length}</strong> incidents
+            Showing page <strong>{page}</strong> of <strong>{totalPages}</strong> ·
+            {' '}<strong>{incidents.length}</strong> on this page ·
+            {' '}<strong>{totalItems}</strong> total incidents
           </span>
         )}
       </div>
@@ -85,7 +163,30 @@ export default function Incidents() {
       {loading ? (
         <div className={styles.loading}>Loading incidents…</div>
       ) : (
-        <IncidentTable incidents={filtered} />
+        <>
+          <IncidentTable incidents={incidents} />
+          <div className={styles.pagination}>
+            <button
+              type="button"
+              className={styles.actionBtn}
+              disabled={!hasPrev}
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+            >
+              Previous
+            </button>
+            <span className={styles.pageInfo}>
+              Page {page} / {totalPages}
+            </span>
+            <button
+              type="button"
+              className={styles.actionBtn}
+              disabled={!hasNext}
+              onClick={() => setPage((current) => current + 1)}
+            >
+              Next
+            </button>
+          </div>
+        </>
       )}
     </main>
   );
