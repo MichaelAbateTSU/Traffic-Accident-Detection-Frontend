@@ -2,7 +2,22 @@ import { useState, useEffect } from 'react';
 import CameraCard  from '../../components/CameraCard/CameraCard.jsx';
 import AlertBanner from '../../components/AlertBanner/AlertBanner.jsx';
 import { getCameraStatus } from '../../services/api.js';
+import { FIXED_CAMERA_STREAM_URLS, getCameraIdFromStreamUrl } from '../../constants/cameras.js';
 import styles from './LiveFeed.module.css';
+
+function mapFixedCameras(statusById = new Map(), statusByStreamUrl = new Map()) {
+  return FIXED_CAMERA_STREAM_URLS.map((streamUrl) => {
+    const id = getCameraIdFromStreamUrl(streamUrl);
+    const statusItem = statusById.get(id) ?? statusByStreamUrl.get(streamUrl);
+    return {
+      id,
+      name: id,
+      stream_url: streamUrl,
+      status: statusItem?.status ?? 'online',
+      fps: statusItem?.fps ?? null,
+    };
+  });
+}
 
 export default function LiveFeed() {
   const [cameras,     setCameras]     = useState([]);
@@ -13,9 +28,18 @@ export default function LiveFeed() {
   useEffect(() => {
     async function load() {
       try {
-        const data = await getCameraStatus();
-        setCameras(data);
+        const statusItems = await getCameraStatus();
+        const statusById = new Map(
+          statusItems.map((item) => [String(item.id), item]),
+        );
+        const statusByStreamUrl = new Map(
+          statusItems
+            .filter((item) => item.stream_url)
+            .map((item) => [String(item.stream_url), item]),
+        );
+        setCameras(mapFixedCameras(statusById, statusByStreamUrl));
       } catch (err) {
+        setCameras(mapFixedCameras());
         setError(err.message);
       } finally {
         setLoading(false);

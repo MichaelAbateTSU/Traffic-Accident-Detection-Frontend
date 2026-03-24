@@ -9,12 +9,14 @@ import {
   getJobStatus,
   startDetectionJob,
 } from '../../services/api.js';
+import { FIXED_CAMERA_STREAM_URLS, FIXED_MAX_FRAMES } from '../../constants/cameras.js';
 import styles from './Dashboard.module.css';
 
 const JOB_POLL_INTERVAL_MS = 3000;
 const TERMINAL_JOB_STATES = new Set(['complete', 'completed', 'failed', 'cancelled', 'error']);
 
 export default function Dashboard() {
+  const totalFixedCameras = FIXED_CAMERA_STREAM_URLS.length;
   const [stats,     setStats]     = useState(null);
   const [incidents, setIncidents] = useState([]);
   const [loading,   setLoading]   = useState(true);
@@ -22,8 +24,6 @@ export default function Dashboard() {
   const [totalRecentIncidents, setTotalRecentIncidents] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
 
-  const [streamUrl, setStreamUrl] = useState('https://mcleansfs3.us-east-1.skyvdn.com/rtplive/R2_066/playlist.m3u8');
-  const [maxFrames, setMaxFrames] = useState(5);
   const [saveFrames, setSaveFrames] = useState(false);
   const [startingJob, setStartingJob] = useState(false);
   const [jobStatus, setJobStatus] = useState(null);
@@ -110,10 +110,6 @@ export default function Dashboard() {
 
   async function handleStartJob(event) {
     event.preventDefault();
-    if (!streamUrl.trim()) {
-      setJobError('Stream URL is required.');
-      return;
-    }
 
     setStartingJob(true);
     setJobError(null);
@@ -123,21 +119,28 @@ export default function Dashboard() {
     clearJobRequests();
 
     try {
-      const { item } = await startDetectionJob({
-        stream_url: streamUrl.trim(),
-        max_frames: Number(maxFrames),
-        save_frames: saveFrames,
-      });
+      let latestJob = null;
+      for (const streamUrl of FIXED_CAMERA_STREAM_URLS) {
+        const { item } = await startDetectionJob({
+          stream_url: streamUrl,
+          max_frames: FIXED_MAX_FRAMES,
+          save_frames: saveFrames,
+        });
+        latestJob = item;
+      }
 
-      setJobStatus(item);
-      if (!item.id) {
+      if (!latestJob) {
+        throw new Error('No jobs were started.');
+      }
+      setJobStatus(latestJob);
+      if (!latestJob.id) {
         throw new Error('Job started but no job id was returned by the backend.');
       }
 
-      const statusResult = await fetchJobStatus(item.id);
+      const statusResult = await fetchJobStatus(latestJob.id);
       if (!statusResult?.isTerminal) {
         pollTimerRef.current = setInterval(() => {
-          fetchJobStatus(item.id);
+          fetchJobStatus(latestJob.id);
         }, JOB_POLL_INTERVAL_MS);
       }
     } catch (err) {
@@ -245,21 +248,6 @@ export default function Dashboard() {
           <h2 className={styles.sectionTitle}>Detection Job Monitor</h2>
         </div>
         <form className={styles.jobForm} onSubmit={handleStartJob}>
-          <input
-            className={styles.input}
-            type="url"
-            placeholder="https://example.com/live/stream.m3u8"
-            value={streamUrl}
-            onChange={(event) => setStreamUrl(event.target.value)}
-          />
-          <input
-            className={styles.inputSmall}
-            type="number"
-            min="1"
-            value={maxFrames}
-            onChange={(event) => setMaxFrames(event.target.value)}
-            aria-label="Max frames"
-          />
           <label className={styles.checkboxLabel}>
             <input
               type="checkbox"
@@ -269,9 +257,12 @@ export default function Dashboard() {
             Save frames
           </label>
           <button type="submit" className={styles.retryBtn} disabled={startingJob}>
-            {startingJob ? 'Starting...' : 'Start Job'}
+            {startingJob ? 'Starting...' : `Start Jobs for ${totalFixedCameras} Cameras`}
           </button>
         </form>
+        <p className={styles.hint}>
+          Uses {totalFixedCameras} fixed camera stream URLs with <strong>{FIXED_MAX_FRAMES}</strong> max frames per job.
+        </p>
 
         {jobError && (
           <AlertBanner type="warning" message="Job monitor error" detail={jobError} />
