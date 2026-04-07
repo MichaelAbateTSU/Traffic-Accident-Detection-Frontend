@@ -1,8 +1,10 @@
-import { useState, useEffect } from 'react';
-import CameraCard  from '../../components/CameraCard/CameraCard.jsx';
-import AlertBanner from '../../components/AlertBanner/AlertBanner.jsx';
+import { useEffect, useState } from 'react';
+import CameraCard from '../../components/CameraCard/CameraCard.jsx';
+import DataState from '../../components/DataState/DataState.jsx';
+import MetaInfoPanel from '../../components/MetaInfoPanel/MetaInfoPanel.jsx';
 import { getCameraStatus } from '../../services/api.js';
 import { FIXED_CAMERA_STREAM_URLS, getCameraIdFromStreamUrl } from '../../constants/cameras.js';
+import { formatDateTime } from '../../utils/formatters.js';
 import styles from './LiveFeed.module.css';
 
 function mapFixedCameras(statusById = new Map(), statusByStreamUrl = new Map()) {
@@ -12,33 +14,43 @@ function mapFixedCameras(statusById = new Map(), statusByStreamUrl = new Map()) 
     return {
       id,
       name: id,
-      stream_url: streamUrl,
+      streamUrl: streamUrl,
       status: statusItem?.status ?? 'online',
       fps: statusItem?.fps ?? null,
+      lastSeenAt: statusItem?.lastSeenAt ?? null,
+      lastJobId: statusItem?.lastJobId ?? null,
     };
   });
 }
 
 export default function LiveFeed() {
-  const [cameras,     setCameras]     = useState([]);
-  const [loading,     setLoading]     = useState(true);
-  const [error,       setError]       = useState(null);
+  const [cameras, setCameras] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [meta, setMeta] = useState(null);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [pollInterval, setPollInterval] = useState(5000);
 
   useEffect(() => {
+    const controller = new AbortController();
     async function load() {
       try {
-        const statusItems = await getCameraStatus();
+        const { items, meta: metaValue } = await getCameraStatus({ signal: controller.signal });
         const statusById = new Map(
-          statusItems.map((item) => [String(item.id), item]),
+          items.map((item) => [String(item.id), item]),
         );
         const statusByStreamUrl = new Map(
-          statusItems
-            .filter((item) => item.stream_url)
-            .map((item) => [String(item.stream_url), item]),
+          items
+            .filter((item) => item.streamUrl)
+            .map((item) => [String(item.streamUrl), item]),
         );
         setCameras(mapFixedCameras(statusById, statusByStreamUrl));
+        setMeta(metaValue);
+        setLastUpdatedAt(new Date().toISOString());
+        setError(null);
       } catch (err) {
+        if (err.name === 'AbortError') return;
         setCameras(mapFixedCameras());
         setError(err.message);
       } finally {
@@ -46,11 +58,12 @@ export default function LiveFeed() {
       }
     }
     load();
-  }, []);
+    return () => controller.abort();
+  }, [refreshKey]);
 
-  const onlineCount  = cameras.filter(c => c.status === 'online').length;
-  const warningCount = cameras.filter(c => c.status === 'warning').length;
-  const offlineCount = cameras.filter(c => c.status === 'offline').length;
+  const onlineCount = cameras.filter((camera) => camera.status === 'online').length;
+  const warningCount = cameras.filter((camera) => camera.status === 'warning').length;
+  const offlineCount = cameras.filter((camera) => camera.status === 'offline').length;
 
   return (
     <main className={styles.page}>
@@ -65,7 +78,7 @@ export default function LiveFeed() {
             id="poll-interval"
             className={styles.select}
             value={pollInterval}
-            onChange={e => setPollInterval(Number(e.target.value))}
+            onChange={(event) => setPollInterval(Number(event.target.value))}
           >
             <option value={2000}>2s</option>
             <option value={5000}>5s</option>
@@ -73,12 +86,11 @@ export default function LiveFeed() {
             <option value={30000}>30s</option>
             <option value={0}>Manual</option>
           </select>
+          <button type="button" className={styles.refreshBtn} onClick={() => setRefreshKey((value) => value + 1)}>
+            Refresh status
+          </button>
         </div>
       </div>
-
-      {error && (
-        <AlertBanner type="warning" message="Could not load camera list" detail={error} />
-      )}
 
       {!loading && cameras.length > 0 && (
         <div className={styles.summary}>
@@ -98,20 +110,30 @@ export default function LiveFeed() {
               {offlineCount} Offline
             </span>
           )}
+          {lastUpdatedAt && <span className={styles.summaryItem}>Updated: {formatDateTime(lastUpdatedAt)}</span>}
         </div>
       )}
 
-      {loading ? (
-        <div className={styles.loading}>Loading cameras…</div>
-      ) : cameras.length === 0 ? (
-        <div className={styles.empty}>No cameras configured.</div>
-      ) : (
+      <DataState
+        loading={loading}
+        error={error}
+        isEmpty={!cameras.length}
+        emptyMessage="No cameras configured."
+        onRetry={() => setRefreshKey((value) => value + 1)}
+        loadingMessage="Loading camera statuses..."
+        loadingVariant="skeleton"
+        loadingRows={4}
+      >
         <div className={styles.grid}>
-          {cameras.map(camera => (
+          {cameras.map((camera) => (
             <CameraCard key={camera.id} camera={camera} pollInterval={pollInterval} />
           ))}
         </div>
-      )}
+      </DataState>
+      <details className={styles.advancedDetails}>
+        <summary>Advanced Details</summary>
+        <MetaInfoPanel meta={meta} title="Camera status meta" />
+      </details>
     </main>
   );
 }

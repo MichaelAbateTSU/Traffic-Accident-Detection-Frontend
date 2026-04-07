@@ -1,0 +1,30 @@
+.panel {
+  border: 1px solid var(--border, #263149);
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.5rem;
+  background: var(--surface, #141c2f);
+}
+
+.title {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.grid {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--muted, #9eabc6);
+  font-size: 0.88rem;
+}
+
+.block {
+  margin: 0;
+  padding: 0.65rem;
+  border-radius: 0.6rem;
+  border: 1px solid var(--border, #263149);
+  background: var(--surface-alt, #1b2439);
+  overflow: auto;
+  font-size: 0.78rem;
+}

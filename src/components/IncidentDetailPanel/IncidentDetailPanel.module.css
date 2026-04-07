@@ -1,0 +1,33 @@
+.panel {
+  border: 1px solid var(--border, #263149);
+  border-radius: 0.75rem;
+  padding: 0.85rem;
+  display: grid;
+  gap: 0.7rem;
+  background: var(--surface, #141c2f);
+}
+
+.title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.4rem 0.8rem;
+  color: var(--muted, #9eabc6);
+  font-size: 0.84rem;
+}
+
+.box {
+  margin: 0;
+  color: var(--muted, #9eabc6);
+  font-size: 0.84rem;
+}
+
+.link {
+  color: #7cd5ff;
+  width: fit-content;
+  font-size: 0.86rem;
+}

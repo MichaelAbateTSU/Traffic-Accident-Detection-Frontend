@@ -1,0 +1,63 @@
+.card {
+  border: 1px solid var(--color-border, #263149);
+  border-radius: 0.75rem;
+  padding: 0.92rem;
+  background: var(--color-bg-card, #141c2f);
+  display: grid;
+  gap: 0.65rem;
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast);
+}
+
+.card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-card);
+  border-color: rgba(124, 213, 255, 0.35);
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.82rem;
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.35rem 0.8rem;
+  color: var(--color-text-secondary, #9eabc6);
+  font-size: 0.82rem;
+}
+
+.accidentYes {
+  color: #fca5a5;
+  font-weight: 600;
+}
+
+.accidentNo {
+  color: #86efac;
+  font-weight: 600;
+}
+
+.link {
+  color: #7cd5ff;
+  width: fit-content;
+  font-size: 0.85rem;
+}
+
+.message {
+  color: var(--muted, #9eabc6);
+  font-size: 0.84rem;
+}
+
+.error {
+  color: #ff9ca8;
+  font-size: 0.84rem;
+}

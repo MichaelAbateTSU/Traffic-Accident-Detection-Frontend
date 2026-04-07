@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Navbar    from './components/Navbar/Navbar.jsx';
 import Dashboard from './pages/Dashboard/Dashboard.jsx';
 import LiveFeed  from './pages/LiveFeed/LiveFeed.jsx';
+import CameraView from './pages/CameraView/CameraView.jsx';
 import Incidents from './pages/Incidents/Incidents.jsx';
 import Settings  from './pages/Settings/Settings.jsx';
 import styles    from './App.module.css';
@@ -15,6 +16,7 @@ export default function App() {
           <Routes>
             <Route path="/"          element={<Dashboard />} />
             <Route path="/live"      element={<LiveFeed />}  />
+            <Route path="/camera/:id" element={<CameraView />} />
             <Route path="/incidents" element={<Incidents />} />
             <Route path="/settings"  element={<Settings />}  />
             {/* Fallback — redirect unknown routes to dashboard */}

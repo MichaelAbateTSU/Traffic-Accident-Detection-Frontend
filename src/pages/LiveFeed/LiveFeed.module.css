@@ -53,6 +53,17 @@
 .select:hover { border-color: var(--color-accent-blue); }
 .select:focus { outline: 2px solid var(--color-accent-blue); outline-offset: 2px; }
 
+.refreshBtn {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
 /* Summary bar */
 .summary {
   display: flex;
@@ -93,7 +104,23 @@
   font-size: 0.875rem;
 }
 
+.advancedDetails {
+  margin-top: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: rgba(22, 27, 39, 0.9);
+  padding: 0.55rem 0.75rem;
+}
+
+.advancedDetails > summary {
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
 @media (max-width: 640px) {
   .page  { padding: 1rem; }
   .grid  { grid-template-columns: 1fr; }
+  .summary { flex-wrap: wrap; gap: 0.65rem; }
 }

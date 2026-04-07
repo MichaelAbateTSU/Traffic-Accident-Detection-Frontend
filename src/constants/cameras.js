@@ -16,3 +16,8 @@ export function getCameraIdFromStreamUrl(streamUrl) {
   const match = String(streamUrl).match(/\/(R2_\d+)\/playlist\.m3u8$/i);
   return match?.[1] ?? streamUrl;
 }
+
+export function getStreamUrlForCameraId(cameraId) {
+  const normalizedId = String(cameraId);
+  return FIXED_CAMERA_STREAM_URLS.find((streamUrl) => getCameraIdFromStreamUrl(streamUrl) === normalizedId) ?? null;
+}

@@ -1,0 +1,19 @@
+.chartWrap {
+  border: 1px solid var(--color-border, #263149);
+  border-radius: 0.75rem;
+  background: var(--color-bg-card, #141c2f);
+  padding: 0.85rem 0.85rem 0.45rem;
+  box-shadow: var(--shadow-card);
+}
+
+.title {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--color-text-primary);
+}
+
+.description {
+  margin: 0.35rem 0 0.65rem;
+  font-size: 0.78rem;
+  color: var(--color-text-secondary);
+}

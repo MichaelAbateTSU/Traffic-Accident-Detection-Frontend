@@ -1,252 +1,321 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import StatCard     from '../../components/StatCard/StatCard.jsx';
+import StatCard from '../../components/StatCard/StatCard.jsx';
 import IncidentTable from '../../components/IncidentTable/IncidentTable.jsx';
-import AlertBanner  from '../../components/AlertBanner/AlertBanner.jsx';
-import {
-  getDashboard,
-  getJobDetections,
-  getJobStatus,
-  startDetectionJob,
-} from '../../services/api.js';
+import AlertBanner from '../../components/AlertBanner/AlertBanner.jsx';
+import DataState from '../../components/DataState/DataState.jsx';
+import MetaInfoPanel from '../../components/MetaInfoPanel/MetaInfoPanel.jsx';
+import JobStatusCard from '../../components/JobStatusCard/JobStatusCard.jsx';
+import IncidentDetailPanel from '../../components/IncidentDetailPanel/IncidentDetailPanel.jsx';
+import ConfidenceTrendChart from '../../components/charts/ConfidenceTrendChart.jsx';
+import DetectionSignalsChart from '../../components/charts/DetectionSignalsChart.jsx';
+import StatusBadge from '../../components/StatusBadge/StatusBadge.jsx';
+import SectionCard from '../../components/SectionCard/SectionCard.jsx';
+import CameraPreviewCard from '../../components/CameraPreviewCard/CameraPreviewCard.jsx';
+import { getJob, startDetectionJob } from '../../services/api.js';
 import { FIXED_CAMERA_STREAM_URLS, FIXED_MAX_FRAMES } from '../../constants/cameras.js';
+import { formatDateTime, formatPercent } from '../../utils/formatters.js';
+import { useDashboardData } from '../../hooks/useDashboardData.js';
 import styles from './Dashboard.module.css';
 
-const JOB_POLL_INTERVAL_MS = 3000;
-const TERMINAL_JOB_STATES = new Set(['complete', 'completed', 'failed', 'cancelled', 'error']);
+const POLL_INTERVAL_MS = 3000;
+const INITIAL_POLL_DELAY_MS = 90000;
+
+function isCompleteStatus(status) {
+  return String(status ?? '').toLowerCase() === 'complete';
+}
+
+function normalizeMonitorJobStatus(status) {
+  return isCompleteStatus(status) ? 'complete' : 'pending';
+}
+
+function normalizeMonitorJob(jobItem = {}) {
+  return {
+    ...jobItem,
+    status: normalizeMonitorJobStatus(jobItem.status),
+  };
+}
+
+function getDetectionStatusBadge(status) {
+  const normalized = String(status ?? '').toLowerCase();
+  if (normalized === 'active') return <StatusBadge status="active" label="Active" />;
+  if (normalized === 'degraded') return <StatusBadge status="warning" label="Degraded" />;
+  return <StatusBadge status="critical" label={status ?? 'Offline'} />;
+}
 
 export default function Dashboard() {
-  const totalFixedCameras = FIXED_CAMERA_STREAM_URLS.length;
-  const [stats,     setStats]     = useState(null);
-  const [incidents, setIncidents] = useState([]);
-  const [loading,   setLoading]   = useState(true);
-  const [error,     setError]     = useState(null);
-  const [totalRecentIncidents, setTotalRecentIncidents] = useState(0);
-  const [refreshKey, setRefreshKey] = useState(0);
-
   const [saveFrames, setSaveFrames] = useState(false);
   const [startingJob, setStartingJob] = useState(false);
-  const [jobStatus, setJobStatus] = useState(null);
-  const [jobDetections, setJobDetections] = useState([]);
+  const [monitoredJobs, setMonitoredJobs] = useState([]);
   const [jobError, setJobError] = useState(null);
+  const [pollingActive, setPollingActive] = useState(false);
+  const [selectedIncident, setSelectedIncident] = useState(null);
+  const totalFixedCameras = FIXED_CAMERA_STREAM_URLS.length;
+  const pollingTimerRef = useRef(null);
+  const pollingStartDelayRef = useRef(null);
+  const monitoredJobsRef = useRef([]);
+  const pollingInFlightRef = useRef(false);
 
-  const pollTimerRef = useRef(null);
-  const jobStatusControllerRef = useRef(null);
-  const jobDetectionsControllerRef = useRef(null);
+  const {
+    stats,
+    overviewMeta,
+    incidents,
+    incidentsMeta,
+    cameras,
+    health,
+    healthMeta,
+    jobs,
+    jobsMeta,
+    loading,
+    error,
+    reload,
+  } = useDashboardData({ incidentsPageSize: 5, incidentsStatus: 'active' });
+  useEffect(() => {
+    monitoredJobsRef.current = monitoredJobs;
+  }, [monitoredJobs]);
 
-  function stopPolling() {
-    if (pollTimerRef.current) {
-      clearInterval(pollTimerRef.current);
-      pollTimerRef.current = null;
+  const stopBatchPolling = useCallback(() => {
+    if (pollingStartDelayRef.current) {
+      clearTimeout(pollingStartDelayRef.current);
+      pollingStartDelayRef.current = null;
     }
-  }
-
-  function clearJobRequests() {
-    if (jobStatusControllerRef.current) {
-      jobStatusControllerRef.current.abort();
-      jobStatusControllerRef.current = null;
+    if (pollingTimerRef.current) {
+      clearInterval(pollingTimerRef.current);
+      pollingTimerRef.current = null;
     }
-    if (jobDetectionsControllerRef.current) {
-      jobDetectionsControllerRef.current.abort();
-      jobDetectionsControllerRef.current = null;
-    }
-  }
+    setPollingActive(false);
+  }, []);
 
-  async function loadDashboardData(signal) {
-    setLoading(true);
+  const refreshPendingJobs = useCallback(async () => {
+    const currentJobs = monitoredJobsRef.current;
+    const pendingIds = currentJobs
+      .filter((jobItem) => !isCompleteStatus(jobItem.status))
+      .map((jobItem) => jobItem.id)
+      .filter(Boolean);
+
+    if (!pendingIds.length) {
+      stopBatchPolling();
+      return;
+    }
+
+    if (pollingInFlightRef.current) return;
+    pollingInFlightRef.current = true;
+
     try {
-      const dashboard = await getDashboard(
-        { incidentsPageSize: 5, incidentsStatus: 'active' },
-        { signal },
+      const responses = await Promise.all(
+        pendingIds.map(async (jobId) => {
+          try {
+            const { item } = await getJob(jobId);
+            return { jobId, item };
+          } catch (error) {
+            return { jobId, error };
+          }
+        }),
       );
 
-      setStats(dashboard.stats);
-      setIncidents(dashboard.incidents?.items ?? []);
-      setTotalRecentIncidents(
-        dashboard.incidents?.meta?.pagination?.total_items
-        ?? dashboard.incidents?.items?.length
-        ?? 0,
-      );
-      setError(null);
-    } catch (err) {
-      if (err.name === 'AbortError') return;
-      setError(err.message);
-    } finally {
-      if (!signal.aborted) setLoading(false);
-    }
-  }
+      let allCompleteAfterRefresh = false;
+      setMonitoredJobs((current) => {
+        const responseById = new Map(responses.map((response) => [response.jobId, response]));
+        const next = current.map((jobItem) => {
+          const response = responseById.get(jobItem.id);
+          if (!response) return jobItem;
+          if (response.item) {
+            return normalizeMonitorJob({
+              ...jobItem,
+              ...response.item,
+              events: response.item.events?.length ? response.item.events : jobItem.events ?? [],
+            });
+          }
+          return {
+            ...jobItem,
+            error: response.error?.message ?? 'Failed to refresh job status.',
+          };
+        });
+        allCompleteAfterRefresh = next.length > 0 && next.every((jobItem) => isCompleteStatus(jobItem.status));
+        return next;
+      });
 
-  async function fetchJobStatus(jobId) {
-    if (!jobId) return;
-    const controller = new AbortController();
-    if (jobStatusControllerRef.current) jobStatusControllerRef.current.abort();
-    jobStatusControllerRef.current = controller;
+      const firstError = responses.find((response) => response.error);
+      setJobError(firstError ? firstError.error.message : null);
 
-    try {
-      const { item } = await getJobStatus(jobId, { signal: controller.signal });
-      setJobStatus(item);
-      setJobError(null);
-      const isTerminal = TERMINAL_JOB_STATES.has(String(item.status).toLowerCase());
-
-      if (isTerminal) {
-        stopPolling();
-        const normalizedStatus = String(item.status).toLowerCase();
-        if (normalizedStatus === 'complete' || normalizedStatus === 'completed') {
-          const detectionController = new AbortController();
-          if (jobDetectionsControllerRef.current) jobDetectionsControllerRef.current.abort();
-          jobDetectionsControllerRef.current = detectionController;
-          const detections = await getJobDetections(jobId, { detail: 'full', page: 1, pageSize: 50 }, { signal: detectionController.signal });
-          setJobDetections(detections.items);
-        }
+      if (allCompleteAfterRefresh) {
+        stopBatchPolling();
       }
-      return { item, isTerminal };
-    } catch (err) {
-      if (err.name === 'AbortError') return { item: null, isTerminal: true };
-      setJobError(err.message);
-      stopPolling();
-      return { item: null, isTerminal: true };
+    } finally {
+      pollingInFlightRef.current = false;
     }
-  }
+  }, [stopBatchPolling]);
+
+  const startBatchPolling = useCallback(() => {
+    stopBatchPolling();
+    setPollingActive(true);
+    refreshPendingJobs();
+    pollingTimerRef.current = setInterval(refreshPendingJobs, POLL_INTERVAL_MS);
+  }, [refreshPendingJobs, stopBatchPolling]);
+
+  useEffect(() => {
+    return () => {
+      stopBatchPolling();
+    };
+  }, [stopBatchPolling]);
 
   async function handleStartJob(event) {
     event.preventDefault();
 
     setStartingJob(true);
+    stopBatchPolling();
     setJobError(null);
-    setJobStatus(null);
-    setJobDetections([]);
-    stopPolling();
-    clearJobRequests();
+    setMonitoredJobs([]);
 
     try {
-      let latestJob = null;
+      const queuedResponses = [];
+
       for (const streamUrl of FIXED_CAMERA_STREAM_URLS) {
         const { item } = await startDetectionJob({
           stream_url: streamUrl,
           max_frames: FIXED_MAX_FRAMES,
           save_frames: saveFrames,
         });
-        latestJob = item;
+        if (!item?.id) {
+          throw new Error('Job started but no job id was returned by the backend.');
+        }
+        queuedResponses.push(normalizeMonitorJob(item));
       }
 
-      if (!latestJob) {
+      if (!queuedResponses.length) {
         throw new Error('No jobs were started.');
       }
-      setJobStatus(latestJob);
-      if (!latestJob.id) {
-        throw new Error('Job started but no job id was returned by the backend.');
-      }
 
-      const statusResult = await fetchJobStatus(latestJob.id);
-      if (!statusResult?.isTerminal) {
-        pollTimerRef.current = setInterval(() => {
-          fetchJobStatus(latestJob.id);
-        }, JOB_POLL_INTERVAL_MS);
-      }
+      monitoredJobsRef.current = queuedResponses;
+      setMonitoredJobs(queuedResponses);
+      pollingStartDelayRef.current = setTimeout(() => {
+        startBatchPolling();
+      }, INITIAL_POLL_DELAY_MS);
+      reload();
     } catch (err) {
+      console.error(err);
       setJobError(err.message);
     } finally {
       setStartingJob(false);
     }
   }
 
-  useEffect(() => {
-    const controller = new AbortController();
-    loadDashboardData(controller.signal);
-    return () => {
-      controller.abort();
-    };
-  }, [refreshKey]);
-
-  useEffect(() => {
-    return () => {
-      stopPolling();
-      clearJobRequests();
-    };
-  }, []);
-
-  const activeIncidents = incidents.filter(i => !i.resolved);
+  const activeIncidents = useMemo(() => incidents.filter((incident) => !incident.resolved), [incidents]);
+  const totalRecentIncidents = incidentsMeta?.pagination?.total_items ?? incidents.length;
+  const completedJobsCount = monitoredJobs.filter((jobItem) => isCompleteStatus(jobItem.status)).length;
+  const pendingJobsCount = Math.max(0, monitoredJobs.length - completedJobsCount);
+  const allBatchJobsComplete = monitoredJobs.length > 0 && completedJobsCount === monitoredJobs.length;
+  const latestCompletedJob = useMemo(() => {
+    const completed = monitoredJobs.filter((jobItem) => isCompleteStatus(jobItem.status));
+    if (!completed.length) return null;
+    return completed
+      .slice()
+      .sort(
+        (a, b) =>
+          new Date(b.completedAt ?? b.createdAt ?? 0).getTime() -
+          new Date(a.completedAt ?? a.createdAt ?? 0).getTime(),
+      )[0];
+  }, [monitoredJobs]);
+  const detections = latestCompletedJob?.events ?? [];
+  const topSignals = detections[0]?.signalValues ?? null;
+  const accidentJobsCount = monitoredJobs.filter((jobItem) => jobItem.accidentDetected === true).length;
+  const previewCameras = cameras.slice(0, 6);
+  const uptimePercent = stats?.uptimePercent != null ? Number(stats.uptimePercent) : null;
 
   return (
     <main className={styles.page}>
       <div className={styles.header}>
-        <h1 className={styles.title}>Dashboard</h1>
-        <span className={styles.subtitle}>Real-time overview of highway monitoring</span>
+        <h1 className={styles.title}>Operations Dashboard</h1>
+        <span className={styles.subtitle}>Real-time traffic incident monitoring and detection confidence overview</span>
       </div>
+
+      {health && (
+        <section className={styles.healthStrip}>
+          <span className={styles.healthItem}><strong>Service</strong><StatusBadge status={health.status} label={health.status} /></span>
+          <span className={styles.healthItem}><strong>Model</strong><StatusBadge status={health.modelLoaded ? 'healthy' : 'critical'} label={health.modelLoaded ? 'Loaded' : 'Not Loaded'} /></span>
+          <span className={styles.healthItem}><strong>Jobs</strong>{health.activeJobs}/{health.totalJobs}</span>
+          <span className={styles.healthItem}><strong>Last refresh</strong>{formatDateTime(stats?.refreshedAt)}</span>
+        </section>
+      )}
 
       {activeIncidents.length > 0 && (
         <AlertBanner
           type="danger"
           message={`${activeIncidents.length} active incident${activeIncidents.length > 1 ? 's' : ''} detected`}
-          detail={activeIncidents.map(i => `${i.cameraId} — ${i.type}`).join(' · ')}
+          detail={activeIncidents.map((incident) => `${incident.cameraId} — ${incident.type}`).join(' · ')}
         />
       )}
 
-      {error && (
-        <div className={styles.inlineNotice}>
-          <AlertBanner type="warning" message="Could not load dashboard data" detail={error} />
-          <button type="button" className={styles.retryBtn} onClick={() => setRefreshKey((v) => v + 1)}>
-            Retry
-          </button>
-        </div>
-      )}
-
-      {loading ? (
-        <div className={styles.loading}>Loading stats…</div>
-      ) : (
+      <DataState
+        loading={loading}
+        error={error}
+        onRetry={reload}
+        loadingMessage="Loading dashboard modules..."
+        loadingVariant="skeleton"
+        loadingRows={4}
+      >
         <section className={styles.statsGrid} aria-label="Statistics">
           <StatCard
             label="Active Cameras"
             value={stats ? `${stats.activeCameras}/${stats.totalCameras}` : '—'}
-            icon="📷"
+            icon="CAM"
+            trend={stats?.activeCameras === stats?.totalCameras ? 'All online' : 'Degraded'}
             variant={stats?.activeCameras === stats?.totalCameras ? 'good' : 'warn'}
             description="Cameras currently online"
           />
           <StatCard
             label="Incidents Today"
             value={stats?.incidentsToday ?? '—'}
-            icon="🚨"
+            icon="INC"
+            trend={(stats?.incidentsToday ?? 0) > 0 ? 'Needs attention' : 'Normal'}
             variant={stats?.incidentsToday > 0 ? 'danger' : 'good'}
             description="Accidents or events detected"
           />
           <StatCard
             label="Detection Status"
-            value={stats?.detectionStatus ?? '—'}
-            icon="🔍"
+            value={stats?.detectionStatus ? stats.detectionStatus.toUpperCase() : '—'}
+            icon="DET"
             variant={
-              stats?.detectionStatus === 'active'   ? 'good'   :
-              stats?.detectionStatus === 'degraded' ? 'warn'   : 'danger'
+              stats?.detectionStatus === 'active' ? 'good' :
+              stats?.detectionStatus === 'degraded' ? 'warn' : 'danger'
             }
-            description="YOLO inference engine"
+            badge={getDetectionStatusBadge(stats?.detectionStatus)}
+            description="YOLO inference service state"
           />
           <StatCard
             label="System Uptime"
-            value={stats?.uptimePercent ?? '—'}
-            unit="%"
-            icon="⏱"
+            value={uptimePercent == null ? '—' : formatPercent(uptimePercent / 100, 2)}
+            icon="UPT"
             variant="good"
-            description="Last 30 days"
+            progressPercent={uptimePercent ?? 0}
+            description="Measured over the last 30 days"
           />
         </section>
-      )}
+      </DataState>
 
-      <section className={styles.section}>
-        <div className={styles.sectionHeader}>
-          <h2 className={styles.sectionTitle}>Recent Incidents</h2>
-          <Link to="/incidents" className={styles.viewAll}>View all →</Link>
-        </div>
-        {!loading && (
-          <p className={styles.sectionMeta}>
-            Showing latest <strong>{incidents.length}</strong> of <strong>{totalRecentIncidents}</strong> active incidents
-          </p>
+      <SectionCard
+        title="Recent Incidents"
+        description={`Showing latest ${incidents.length} of ${totalRecentIncidents} active incidents`}
+        action={<Link to="/incidents" className={styles.viewAll}>View all</Link>}
+      >
+        <IncidentTable
+          incidents={incidents}
+          compact
+          onRowClick={setSelectedIncident}
+          selectedIncidentId={selectedIncident?.id ?? null}
+          emptyMessage="No incidents in this dashboard window."
+        />
+        {selectedIncident && (
+          <div className={styles.incidentDetailWrap}>
+            <IncidentDetailPanel incident={selectedIncident} />
+          </div>
         )}
-        <IncidentTable incidents={incidents} compact />
-      </section>
+      </SectionCard>
 
-      <section className={styles.section}>
-        <div className={styles.sectionHeader}>
-          <h2 className={styles.sectionTitle}>Detection Job Monitor</h2>
-        </div>
+      <SectionCard
+        title="Detection Job Monitor"
+        description={`One detection job is queued for each of ${totalFixedCameras} fixed cameras, waits about 90 seconds, then is polled every 3 seconds until complete.`}
+      >
         <form className={styles.jobForm} onSubmit={handleStartJob}>
           <label className={styles.checkboxLabel}>
             <input
@@ -257,42 +326,102 @@ export default function Dashboard() {
             Save frames
           </label>
           <button type="submit" className={styles.retryBtn} disabled={startingJob}>
-            {startingJob ? 'Starting...' : `Start Jobs for ${totalFixedCameras} Cameras`}
+            {startingJob ? `Queueing ${totalFixedCameras} detection jobs...` : `Run detection across ${totalFixedCameras} cameras`}
           </button>
         </form>
-        <p className={styles.hint}>
-          Uses {totalFixedCameras} fixed camera stream URLs with <strong>{FIXED_MAX_FRAMES}</strong> max frames per job.
+
+        <p className={styles.monitorHint}>
+          Jobs are queued as <strong>pending</strong>. Results appear after polling starts (about 90 seconds after queueing), and each
+          job updates to <strong>complete</strong> when backend processing finishes.
         </p>
 
-        {jobError && (
-          <AlertBanner type="warning" message="Job monitor error" detail={jobError} />
-        )}
+        {jobError && <AlertBanner type="warning" message="Job monitor error" detail={jobError} />}
 
-        {jobStatus && (
-          <div className={styles.jobStatus}>
-            <span><strong>Job:</strong> {jobStatus.id}</span>
-            <span><strong>Status:</strong> {jobStatus.status}</span>
-            {jobStatus.progress != null && <span><strong>Progress:</strong> {jobStatus.progress}</span>}
-            {jobStatus.totalDetections != null && <span><strong>Detections:</strong> {jobStatus.totalDetections}</span>}
+        {monitoredJobs.length > 0 && (
+          <div className={styles.monitorSummary} role="status" aria-live="polite">
+            {!allBatchJobsComplete ? (
+              <>
+                <strong>{completedJobsCount} of {monitoredJobs.length} jobs complete.</strong>
+                <span>{pendingJobsCount} jobs still pending.</span>
+              </>
+            ) : (
+              <>
+                <strong>All {monitoredJobs.length} detection jobs completed.</strong>
+                <span>
+                  {accidentJobsCount === 0
+                    ? '0 accidents detected.'
+                    : `${accidentJobsCount} camera${accidentJobsCount > 1 ? 's' : ''} reported accident events.`}
+                </span>
+              </>
+            )}
+            {pollingActive && !allBatchJobsComplete && (
+              <StatusBadge status="warning" label="pending" />
+            )}
           </div>
         )}
 
-        {jobDetections.length > 0 && (
+        {monitoredJobs.length > 0 && (
+          <div className={styles.queueList}>
+            {monitoredJobs.map((jobItem) => (
+              <JobStatusCard key={jobItem.id} job={jobItem} />
+            ))}
+          </div>
+        )}
+
+        {latestCompletedJob && detections.length > 0 && (
           <p className={styles.sectionMeta}>
-            Last completed job returned <strong>{jobDetections.length}</strong> detections.
+            Latest completed job (<strong>{latestCompletedJob.id}</strong>) returned <strong>{detections.length}</strong> events.
+            Peak confidence: <strong>{formatPercent(latestCompletedJob.peakConfidence, 2)}</strong>.
           </p>
         )}
-      </section>
+      </SectionCard>
 
-      <section className={styles.section}>
-        <div className={styles.sectionHeader}>
-          <h2 className={styles.sectionTitle}>Live Cameras</h2>
-          <Link to="/live" className={styles.viewAll}>Open feed →</Link>
+      <SectionCard title="Detection Analytics" description="Confidence evolution and supporting signal strengths from the latest completed run">
+        <div className={styles.chartsGrid}>
+          <ConfidenceTrendChart events={detections} />
+          <DetectionSignalsChart signalValues={topSignals} />
         </div>
-        <p className={styles.hint}>
-          Go to <Link to="/live">Live Feed</Link> to monitor all camera streams in real time.
-        </p>
-      </section>
+      </SectionCard>
+
+      <SectionCard title="Recent Jobs" description="Latest background detection jobs and outcomes">
+        <DataState
+          loading={loading}
+          error={null}
+          isEmpty={!jobs.length}
+          emptyMessage="No jobs available."
+          loadingMessage="Loading recent jobs..."
+          loadingVariant="skeleton"
+          loadingRows={3}
+        >
+          <div className={styles.jobsList}>
+            {jobs.map((jobItem) => (
+              <JobStatusCard key={jobItem.id} job={jobItem} />
+            ))}
+          </div>
+        </DataState>
+      </SectionCard>
+
+      <SectionCard
+        title="Live Cameras"
+        description={`Top ${previewCameras.length} cameras from the current dashboard health snapshot`}
+        action={<Link to="/live" className={styles.viewAll}>Open full feed</Link>}
+      >
+        <div className={styles.cameraGrid}>
+          {previewCameras.map((camera) => (
+            <CameraPreviewCard key={camera.id} camera={camera} />
+          ))}
+        </div>
+      </SectionCard>
+
+      <details className={styles.advancedDetails}>
+        <summary>Advanced Details</summary>
+        <div className={styles.metaGrid}>
+          <MetaInfoPanel meta={overviewMeta} title="Stats meta" />
+          <MetaInfoPanel meta={incidentsMeta} title="Recent incidents meta" />
+          <MetaInfoPanel meta={jobsMeta} title="Jobs list meta" />
+          <MetaInfoPanel meta={healthMeta} title="Health meta" />
+        </div>
+      </details>
     </main>
   );
 }

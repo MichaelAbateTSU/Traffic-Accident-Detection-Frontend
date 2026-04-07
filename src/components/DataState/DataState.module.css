@@ -1,0 +1,56 @@
+.loading {
+  padding: 1rem;
+  border: 1px solid var(--border, #263149);
+  border-radius: 0.75rem;
+  color: var(--muted, #9eabc6);
+  background: var(--surface, #141c2f);
+}
+
+.skeletonWrap {
+  display: grid;
+  gap: 0.55rem;
+  padding: 1rem;
+  border: 1px solid var(--border, #263149);
+  border-radius: 0.75rem;
+  background: var(--surface, #141c2f);
+}
+
+.skeletonLine {
+  height: 0.78rem;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    rgba(139, 154, 180, 0.22) 20%,
+    rgba(139, 154, 180, 0.36) 38%,
+    rgba(139, 154, 180, 0.22) 60%
+  );
+  background-size: 180% 100%;
+  animation: shimmer 1.15s linear infinite;
+}
+
+.stateWrap {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.retryBtn {
+  width: fit-content;
+  border: 1px solid var(--border, #263149);
+  border-radius: 0.6rem;
+  background: var(--surface-alt, #1b2439);
+  color: var(--text, #e6ebf5);
+  padding: 0.45rem 0.75rem;
+  cursor: pointer;
+}
+
+.empty {
+  padding: 1rem;
+  border: 1px dashed var(--border, #263149);
+  border-radius: 0.75rem;
+  color: var(--muted, #9eabc6);
+}
+
+@keyframes shimmer {
+  from { background-position: 180% 0; }
+  to { background-position: -60% 0; }
+}

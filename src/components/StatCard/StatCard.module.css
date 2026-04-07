@@ -2,25 +2,36 @@
   background: var(--color-bg-card);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: 1.25rem 1.5rem;
+  padding: 1.05rem 1.2rem;
   box-shadow: var(--shadow-card);
-  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast);
 }
 
 .card:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow-elevated);
+  border-color: rgba(124, 213, 255, 0.35);
 }
 
 .top {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.65rem;
 }
 
 .icon {
-  font-size: 1.25rem;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 0.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border: 1px solid rgba(124, 213, 255, 0.3);
+  color: #d7f2ff;
+  background: rgba(9, 16, 28, 0.6);
   line-height: 1;
 }
 
@@ -32,6 +43,12 @@
   color: var(--color-text-secondary);
 }
 
+.trend {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--color-text-secondary);
+}
+
 .valueRow {
   display: flex;
   align-items: baseline;
@@ -39,7 +56,7 @@
 }
 
 .value {
-  font-size: 2rem;
+  font-size: 1.7rem;
   font-weight: 700;
   line-height: 1;
   color: var(--color-text-primary);
@@ -51,8 +68,38 @@
   color: var(--color-text-secondary);
 }
 
-.description {
+.badgeWrap {
   margin-top: 0.5rem;
+}
+
+.progressWrap {
+  margin-top: 0.55rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.progressTrack {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(85, 96, 112, 0.28);
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: linear-gradient(90deg, #4cd2ff, #75f18f);
+}
+
+.progressText {
+  font-size: 0.76rem;
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+}
+
+.description {
+  margin-top: 0.45rem;
   font-size: 0.8rem;
   color: var(--color-text-muted);
 }
