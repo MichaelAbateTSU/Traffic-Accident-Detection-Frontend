@@ -5,6 +5,7 @@ import styles from './JobStatusCard.module.css';
 function getBadgeStatus(status) {
   const normalized = String(status ?? '').toLowerCase();
   if (normalized === 'complete') return 'resolved';
+  if (normalized === 'running') return 'active';
   if (normalized === 'pending') return 'warning';
   if (normalized) return 'critical';
   return 'offline';
@@ -12,8 +13,9 @@ function getBadgeStatus(status) {
 
 function getDisplayStatus(status) {
   const normalized = String(status ?? '').toLowerCase();
-  if (normalized === 'running') return 'done';
-  if (normalized === 'pending') return 'complete';
+  if (normalized === 'complete') return 'done';
+  if (normalized === 'running') return 'in-progress';
+  if (normalized === 'pending') return 'pending';
   return status ?? '—';
 }
 

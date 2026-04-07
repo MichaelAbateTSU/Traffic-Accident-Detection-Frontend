@@ -18,7 +18,6 @@ import { formatDateTime, formatPercent } from '../../utils/formatters.js';
 import { useDashboardData } from '../../hooks/useDashboardData.js';
 import styles from './Dashboard.module.css';
 
-const POLL_INTERVAL_MS = 3000;
 const INITIAL_POLL_DELAY_MS = 90000;
 
 function isCompleteStatus(status) {
@@ -48,13 +47,10 @@ export default function Dashboard() {
   const [startingJob, setStartingJob] = useState(false);
   const [monitoredJobs, setMonitoredJobs] = useState([]);
   const [jobError, setJobError] = useState(null);
-  const [pollingActive, setPollingActive] = useState(false);
   const [selectedIncident, setSelectedIncident] = useState(null);
   const totalFixedCameras = FIXED_CAMERA_STREAM_URLS.length;
-  const pollingTimerRef = useRef(null);
   const pollingStartDelayRef = useRef(null);
   const monitoredJobsRef = useRef([]);
-  const pollingInFlightRef = useRef(false);
 
   const {
     stats,
@@ -79,11 +75,6 @@ export default function Dashboard() {
       clearTimeout(pollingStartDelayRef.current);
       pollingStartDelayRef.current = null;
     }
-    if (pollingTimerRef.current) {
-      clearInterval(pollingTimerRef.current);
-      pollingTimerRef.current = null;
-    }
-    setPollingActive(false);
   }, []);
 
   const refreshPendingJobs = useCallback(async () => {
@@ -97,9 +88,6 @@ export default function Dashboard() {
       stopBatchPolling();
       return;
     }
-
-    if (pollingInFlightRef.current) return;
-    pollingInFlightRef.current = true;
 
     try {
       const responses = await Promise.all(
@@ -142,16 +130,9 @@ export default function Dashboard() {
         stopBatchPolling();
       }
     } finally {
-      pollingInFlightRef.current = false;
+      pollingStartDelayRef.current = null;
     }
   }, [stopBatchPolling]);
-
-  const startBatchPolling = useCallback(() => {
-    stopBatchPolling();
-    setPollingActive(true);
-    refreshPendingJobs();
-    pollingTimerRef.current = setInterval(refreshPendingJobs, POLL_INTERVAL_MS);
-  }, [refreshPendingJobs, stopBatchPolling]);
 
   useEffect(() => {
     return () => {
@@ -189,7 +170,7 @@ export default function Dashboard() {
       monitoredJobsRef.current = queuedResponses;
       setMonitoredJobs(queuedResponses);
       pollingStartDelayRef.current = setTimeout(() => {
-        startBatchPolling();
+        refreshPendingJobs();
       }, INITIAL_POLL_DELAY_MS);
       reload();
     } catch (err) {
@@ -314,7 +295,7 @@ export default function Dashboard() {
 
       <SectionCard
         title="Detection Job Monitor"
-        description={`One detection job is queued for each of ${totalFixedCameras} fixed cameras, waits about 90 seconds, then is polled every 3 seconds until complete.`}
+        description={`One detection job is queued for each of ${totalFixedCameras} fixed cameras, waits 90 seconds, then each pending job is refreshed once.`}
       >
         <form className={styles.jobForm} onSubmit={handleStartJob}>
           <label className={styles.checkboxLabel}>
@@ -331,8 +312,8 @@ export default function Dashboard() {
         </form>
 
         <p className={styles.monitorHint}>
-          Jobs are queued as <strong>pending</strong>. Results appear after polling starts (about 90 seconds after queueing), and each
-          job updates to <strong>complete</strong> when backend processing finishes.
+          Jobs are queued as <strong>pending</strong>. After exactly 90 seconds, each job status is fetched once from the backend and
+          updates to <strong>complete</strong> when reported.
         </p>
 
         {jobError && <AlertBanner type="warning" message="Job monitor error" detail={jobError} />}
@@ -354,7 +335,7 @@ export default function Dashboard() {
                 </span>
               </>
             )}
-            {pollingActive && !allBatchJobsComplete && (
+            {pendingJobsCount > 0 && (
               <StatusBadge status="warning" label="pending" />
             )}
           </div>
