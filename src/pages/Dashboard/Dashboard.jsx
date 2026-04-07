@@ -13,19 +13,72 @@ import StatusBadge from '../../components/StatusBadge/StatusBadge.jsx';
 import SectionCard from '../../components/SectionCard/SectionCard.jsx';
 import CameraPreviewCard from '../../components/CameraPreviewCard/CameraPreviewCard.jsx';
 import { getJob, startDetectionJob } from '../../services/api.js';
-import { FIXED_CAMERA_STREAM_URLS, FIXED_MAX_FRAMES } from '../../constants/cameras.js';
+import { FIXED_CAMERA_STREAM_URLS } from '../../constants/cameras.js';
 import { formatDateTime, formatPercent } from '../../utils/formatters.js';
 import { useDashboardData } from '../../hooks/useDashboardData.js';
 import styles from './Dashboard.module.css';
 
-const INITIAL_POLL_DELAY_MS = 90000;
+const JOB_POLL_INTERVAL_MS = 1000;
 
 function isCompleteStatus(status) {
   return String(status ?? '').toLowerCase() === 'complete';
 }
 
+function isFailedStatus(status) {
+  return String(status ?? '').toLowerCase() === 'failed';
+}
+
+function isTerminalStatus(status) {
+  const normalized = String(status ?? '').toLowerCase();
+  return normalized === 'complete' || normalized === 'failed';
+}
+
+function isActiveStatus(status) {
+  const normalized = String(status ?? '').toLowerCase();
+  return normalized === 'pending' || normalized === 'running';
+}
+
 function normalizeMonitorJobStatus(status) {
-  return isCompleteStatus(status) ? 'complete' : 'pending';
+  const normalized = String(status ?? '').toLowerCase();
+  if (['pending', 'running', 'complete', 'failed'].includes(normalized)) {
+    return normalized;
+  }
+  return 'pending';
+}
+
+function getFrameIndex(frame) {
+  if (frame?.frameIndex != null) return frame.frameIndex;
+  if (frame?.frame_index != null) return frame.frame_index;
+  return null;
+}
+
+function normalizeFrameImage(frame = {}) {
+  const frameIndex = getFrameIndex(frame);
+  return {
+    frameIndex,
+    capture: frame.capture ?? null,
+    captureAnnotated: frame.captureAnnotated ?? frame.capture_annotated ?? null,
+    pipelineOutput: frame.pipelineOutput ?? frame.pipeline_output ?? null,
+  };
+}
+
+function mergeFrameImages(existingFrames = [], incomingFrames = []) {
+  const framesByIndex = new Map();
+
+  for (const raw of existingFrames) {
+    const frame = normalizeFrameImage(raw);
+    if (frame.frameIndex == null) continue;
+    framesByIndex.set(frame.frameIndex, frame);
+  }
+
+  for (const raw of incomingFrames) {
+    const frame = normalizeFrameImage(raw);
+    if (frame.frameIndex == null) continue;
+    const previous = framesByIndex.get(frame.frameIndex) ?? {};
+    framesByIndex.set(frame.frameIndex, { ...previous, ...frame });
+  }
+
+  return [...framesByIndex.values()].sort((a, b) => a.frameIndex - b.frameIndex);
 }
 
 function normalizeMonitorJob(jobItem = {}) {
@@ -49,7 +102,8 @@ export default function Dashboard() {
   const [jobError, setJobError] = useState(null);
   const [selectedIncident, setSelectedIncident] = useState(null);
   const totalFixedCameras = FIXED_CAMERA_STREAM_URLS.length;
-  const pollingStartDelayRef = useRef(null);
+  const pollingTimerRef = useRef(null);
+  const refreshingJobsRef = useRef(false);
   const monitoredJobsRef = useRef([]);
 
   const {
@@ -71,16 +125,19 @@ export default function Dashboard() {
   }, [monitoredJobs]);
 
   const stopBatchPolling = useCallback(() => {
-    if (pollingStartDelayRef.current) {
-      clearTimeout(pollingStartDelayRef.current);
-      pollingStartDelayRef.current = null;
+    if (pollingTimerRef.current) {
+      clearInterval(pollingTimerRef.current);
+      pollingTimerRef.current = null;
     }
   }, []);
 
   const refreshPendingJobs = useCallback(async () => {
+    if (refreshingJobsRef.current) return;
+    refreshingJobsRef.current = true;
+
     const currentJobs = monitoredJobsRef.current;
     const pendingIds = currentJobs
-      .filter((jobItem) => !isCompleteStatus(jobItem.status))
+      .filter((jobItem) => !isTerminalStatus(jobItem.status))
       .map((jobItem) => jobItem.id)
       .filter(Boolean);
 
@@ -112,6 +169,7 @@ export default function Dashboard() {
               ...jobItem,
               ...response.item,
               events: response.item.events?.length ? response.item.events : jobItem.events ?? [],
+              frames: mergeFrameImages(jobItem.frames ?? [], response.item.frames ?? []),
             });
           }
           return {
@@ -119,7 +177,7 @@ export default function Dashboard() {
             error: response.error?.message ?? 'Failed to refresh job status.',
           };
         });
-        allCompleteAfterRefresh = next.length > 0 && next.every((jobItem) => isCompleteStatus(jobItem.status));
+        allCompleteAfterRefresh = next.length > 0 && next.every((jobItem) => isTerminalStatus(jobItem.status));
         return next;
       });
 
@@ -130,7 +188,7 @@ export default function Dashboard() {
         stopBatchPolling();
       }
     } finally {
-      pollingStartDelayRef.current = null;
+      refreshingJobsRef.current = false;
     }
   }, [stopBatchPolling]);
 
@@ -154,13 +212,19 @@ export default function Dashboard() {
       for (const streamUrl of FIXED_CAMERA_STREAM_URLS) {
         const { item } = await startDetectionJob({
           stream_url: streamUrl,
-          max_frames: FIXED_MAX_FRAMES,
           save_frames: saveFrames,
         });
-        if (!item?.id) {
+        const id = item?.id ?? item?.jobId ?? item?.job_id;
+        if (!id) {
           throw new Error('Job started but no job id was returned by the backend.');
         }
-        queuedResponses.push(normalizeMonitorJob(item));
+        queuedResponses.push(
+          normalizeMonitorJob({
+            ...item,
+            id,
+            frames: mergeFrameImages([], item?.frames ?? []),
+          }),
+        );
       }
 
       if (!queuedResponses.length) {
@@ -169,9 +233,10 @@ export default function Dashboard() {
 
       monitoredJobsRef.current = queuedResponses;
       setMonitoredJobs(queuedResponses);
-      pollingStartDelayRef.current = setTimeout(() => {
+      refreshPendingJobs();
+      pollingTimerRef.current = setInterval(() => {
         refreshPendingJobs();
-      }, INITIAL_POLL_DELAY_MS);
+      }, JOB_POLL_INTERVAL_MS);
       reload();
     } catch (err) {
       console.error(err);
@@ -184,8 +249,9 @@ export default function Dashboard() {
   const activeIncidents = useMemo(() => incidents.filter((incident) => !incident.resolved), [incidents]);
   const totalRecentIncidents = incidentsMeta?.pagination?.total_items ?? incidents.length;
   const completedJobsCount = monitoredJobs.filter((jobItem) => isCompleteStatus(jobItem.status)).length;
-  const pendingJobsCount = Math.max(0, monitoredJobs.length - completedJobsCount);
-  const allBatchJobsComplete = monitoredJobs.length > 0 && completedJobsCount === monitoredJobs.length;
+  const failedJobsCount = monitoredJobs.filter((jobItem) => isFailedStatus(jobItem.status)).length;
+  const activeJobsCount = monitoredJobs.filter((jobItem) => isActiveStatus(jobItem.status)).length;
+  const allBatchJobsComplete = monitoredJobs.length > 0 && monitoredJobs.every((jobItem) => isTerminalStatus(jobItem.status));
   const latestCompletedJob = useMemo(() => {
     const completed = monitoredJobs.filter((jobItem) => isCompleteStatus(jobItem.status));
     if (!completed.length) return null;
@@ -197,11 +263,54 @@ export default function Dashboard() {
           new Date(a.completedAt ?? a.createdAt ?? 0).getTime(),
       )[0];
   }, [monitoredJobs]);
+  const latestJobWithFrames = useMemo(() => {
+    const candidates = monitoredJobs.filter((jobItem) => (jobItem.frames?.length ?? 0) > 0);
+    if (!candidates.length) return null;
+    return candidates
+      .slice()
+      .sort(
+        (a, b) =>
+          new Date(b.completedAt ?? b.createdAt ?? 0).getTime() -
+          new Date(a.completedAt ?? a.createdAt ?? 0).getTime(),
+      )[0];
+  }, [monitoredJobs]);
   const detections = latestCompletedJob?.events ?? [];
+  const latestCompletedEventCount = latestCompletedJob?.eventCount ?? detections.length;
   const topSignals = detections[0]?.signalValues ?? null;
   const accidentJobsCount = monitoredJobs.filter((jobItem) => jobItem.accidentDetected === true).length;
   const previewCameras = cameras.slice(0, 6);
   const uptimePercent = stats?.uptimePercent != null ? Number(stats.uptimePercent) : null;
+  const apiDebugSnapshot = useMemo(() => {
+    const payload = {
+      stats: stats?.raw ?? stats ?? null,
+      incidents: incidents.map((item) => item?.raw ?? item),
+      cameras: cameras.map((item) => item?.raw ?? item),
+      health: health?.raw ?? health ?? null,
+      jobs: jobs.map((item) => item?.raw ?? item),
+      monitoredJobs: monitoredJobs.map((item) => item?.raw ?? item),
+      overviewMeta: overviewMeta?.raw ?? overviewMeta ?? null,
+      incidentsMeta: incidentsMeta?.raw ?? incidentsMeta ?? null,
+      jobsMeta: jobsMeta?.raw ?? jobsMeta ?? null,
+      healthMeta: healthMeta?.raw ?? healthMeta ?? null,
+      dashboardError: error ?? null,
+      monitorError: jobError ?? null,
+    };
+    return JSON.stringify(payload, null, 2);
+  }, [stats, incidents, cameras, health, jobs, monitoredJobs, overviewMeta, incidentsMeta, jobsMeta, healthMeta, error, jobError]);
+  const recentJobsApiExample = useMemo(() => {
+    if (!jobs.length) return null;
+    const sample = jobs
+      .slice()
+      .sort(
+        (a, b) =>
+          new Date(b.updatedAt ?? b.completedAt ?? b.createdAt ?? 0).getTime() -
+          new Date(a.updatedAt ?? a.completedAt ?? a.createdAt ?? 0).getTime(),
+      )[0];
+    return sample?.raw ?? sample;
+  }, [jobs]);
+  const recentJobsApiExampleJson = useMemo(() => {
+    return JSON.stringify(recentJobsApiExample, null, 2);
+  }, [recentJobsApiExample]);
 
   return (
     <main className={styles.page}>
@@ -295,7 +404,7 @@ export default function Dashboard() {
 
       <SectionCard
         title="Detection Job Monitor"
-        description={`One detection job is queued for each of ${totalFixedCameras} fixed cameras, waits 90 seconds, then each pending job is refreshed once.`}
+        description={`One detection job is queued for each of ${totalFixedCameras} fixed cameras, then each pending/running job is refreshed every second.`}
       >
         <form className={styles.jobForm} onSubmit={handleStartJob}>
           <label className={styles.checkboxLabel}>
@@ -312,8 +421,8 @@ export default function Dashboard() {
         </form>
 
         <p className={styles.monitorHint}>
-          Jobs are queued as <strong>pending</strong>. After exactly 90 seconds, each job status is fetched once from the backend and
-          updates to <strong>complete</strong> when reported.
+          Jobs are queued as <strong>pending</strong>, advance to <strong>running</strong> as processing begins, then end as
+          <strong>complete</strong> or <strong>failed</strong>. Frame images appear progressively while polling.
         </p>
 
         {jobError && <AlertBanner type="warning" message="Job monitor error" detail={jobError} />}
@@ -322,8 +431,8 @@ export default function Dashboard() {
           <div className={styles.monitorSummary} role="status" aria-live="polite">
             {!allBatchJobsComplete ? (
               <>
-                <strong>{completedJobsCount} of {monitoredJobs.length} jobs complete.</strong>
-                <span>{pendingJobsCount} jobs still pending.</span>
+                <strong>{completedJobsCount} complete, {failedJobsCount} failed, out of {monitoredJobs.length} jobs.</strong>
+                <span>{activeJobsCount} jobs still pending/running.</span>
               </>
             ) : (
               <>
@@ -335,8 +444,8 @@ export default function Dashboard() {
                 </span>
               </>
             )}
-            {pendingJobsCount > 0 && (
-              <StatusBadge status="warning" label="pending" />
+            {activeJobsCount > 0 && (
+              <StatusBadge status="warning" label="in-progress" />
             )}
           </div>
         )}
@@ -349,9 +458,44 @@ export default function Dashboard() {
           </div>
         )}
 
-        {latestCompletedJob && detections.length > 0 && (
+        {latestJobWithFrames && (
+          <div className={styles.framesPanel}>
+            <h3 className={styles.framesTitle}>
+              Frame Images - Job {latestJobWithFrames.id} ({latestJobWithFrames.frames.length})
+            </h3>
+            <div className={styles.framesList}>
+              {latestJobWithFrames.frames.map((frame) => (
+                <article key={frame.frameIndex} className={styles.frameCard}>
+                  <div className={styles.frameHeader}>Frame {frame.frameIndex}</div>
+                  <div className={styles.frameGrid}>
+                    <figure>
+                      <figcaption>Original</figcaption>
+                      {frame.capture ? (
+                        <img src={frame.capture} alt={`Frame ${frame.frameIndex} original`} loading="lazy" />
+                      ) : <div>No image</div>}
+                    </figure>
+                    <figure>
+                      <figcaption>Annotated</figcaption>
+                      {frame.captureAnnotated ? (
+                        <img src={frame.captureAnnotated} alt={`Frame ${frame.frameIndex} annotated`} loading="lazy" />
+                      ) : <div>No image</div>}
+                    </figure>
+                    <figure>
+                      <figcaption>Pipeline Output</figcaption>
+                      {frame.pipelineOutput ? (
+                        <img src={frame.pipelineOutput} alt={`Frame ${frame.frameIndex} pipeline output`} loading="lazy" />
+                      ) : <div>No image</div>}
+                    </figure>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {latestCompletedJob && (
           <p className={styles.sectionMeta}>
-            Latest completed job (<strong>{latestCompletedJob.id}</strong>) returned <strong>{detections.length}</strong> events.
+            Latest completed job (<strong>{latestCompletedJob.id}</strong>) returned <strong>{latestCompletedEventCount}</strong> events.
             Peak confidence: <strong>{formatPercent(latestCompletedJob.peakConfidence, 2)}</strong>.
           </p>
         )}
@@ -403,6 +547,20 @@ export default function Dashboard() {
           <MetaInfoPanel meta={healthMeta} title="Health meta" />
         </div>
       </details>
+
+      <SectionCard
+        title="API Debug Output"
+        description="Raw API-backed payload snapshot for troubleshooting."
+      >
+        <p className={styles.sectionMeta}>Recent Jobs API Output (one example)</p>
+        <pre className={styles.debugPre}>
+          {recentJobsApiExampleJson ?? 'No recent jobs API data yet.'}
+        </pre>
+        <p className={styles.sectionMeta}>
+          Full Dashboard API Snapshot
+        </p>
+        <pre className={styles.debugPre}>{apiDebugSnapshot}</pre>
+      </SectionCard>
     </main>
   );
 }

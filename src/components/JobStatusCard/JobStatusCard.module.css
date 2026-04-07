@@ -61,3 +61,119 @@
   color: #ff9ca8;
   font-size: 0.84rem;
 }
+
+.framesSection {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.eventsSection {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.sectionTitle {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.frameRow {
+  border: 1px solid var(--color-border, #263149);
+  border-radius: 0.6rem;
+  background: rgba(30, 37, 53, 0.65);
+  padding: 0.55rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.frameIndex {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-text-secondary, #9eabc6);
+}
+
+.frameTriplet {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.frameTile {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.frameTileLabelRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.frameTileLabel {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary, #9eabc6);
+}
+
+.frameTileLink {
+  font-size: 0.72rem;
+  color: #7cd5ff;
+  text-decoration: none;
+}
+
+.frameTileLink:hover {
+  text-decoration: underline;
+}
+
+.frameTileImage {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 0.45rem;
+  border: 1px solid var(--color-border, #263149);
+  background: #101522;
+}
+
+.frameTileFallback {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 0.45rem;
+  border: 1px dashed var(--color-border, #263149);
+  color: var(--color-text-muted, #8b9ab4);
+  display: grid;
+  place-items: center;
+  font-size: 0.78rem;
+  background: rgba(16, 21, 34, 0.7);
+}
+
+.eventList {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.eventCard {
+  border: 1px solid var(--color-border, #263149);
+  border-radius: 0.5rem;
+  background: rgba(20, 28, 47, 0.7);
+  padding: 0.5rem;
+  display: grid;
+  gap: 0.2rem 0.6rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  color: var(--color-text-secondary, #9eabc6);
+  font-size: 0.78rem;
+}
+
+.emptyState {
+  border: 1px dashed var(--color-border, #263149);
+  border-radius: 0.5rem;
+  color: var(--color-text-muted, #8b9ab4);
+  font-size: 0.78rem;
+  padding: 0.5rem;
+}
+
+@media (max-width: 900px) {
+  .frameTriplet {
+    grid-template-columns: 1fr;
+  }
+}

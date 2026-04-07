@@ -156,6 +156,68 @@
   color: var(--color-text-primary);
 }
 
+.framesPanel {
+  margin-top: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: rgba(20, 28, 47, 0.8);
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.framesTitle {
+  margin: 0;
+  font-size: 0.92rem;
+  color: var(--color-text-primary);
+}
+
+.framesList {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.frameCard {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: rgba(16, 21, 34, 0.7);
+  padding: 0.6rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.frameHeader {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+}
+
+.frameGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.frameGrid figure {
+  margin: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.frameGrid figcaption {
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+}
+
+.frameGrid img {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 0.45rem;
+  border: 1px solid var(--color-border);
+  background: #101522;
+}
+
 .metaGrid {
   margin-top: 0.9rem;
   display: grid;
@@ -205,10 +267,26 @@
   margin-bottom: 0.65rem;
 }
 
+.debugPre {
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.75rem;
+  background: rgba(16, 21, 34, 0.95);
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 @media (max-width: 640px) {
   .page { padding: 1rem; }
   .statsGrid { grid-template-columns: 1fr; }
   .healthStrip { gap: 0.45rem; }
   .queueList { grid-template-columns: 1fr; }
+  .frameGrid { grid-template-columns: 1fr; }
   .chartsGrid { grid-template-columns: 1fr; }
 }

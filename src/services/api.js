@@ -118,6 +118,53 @@ function mapSignalValues(raw = {}) {
   };
 }
 
+function mapFrameImagesApiToUi(item = {}) {
+  const frameIndex = numberOrNull(pickFirst(item.frame_index, item.frameIndex, null));
+  return {
+    frameIndex,
+    capture: pickFirst(item.capture, null),
+    captureAnnotated: pickFirst(item.capture_annotated, item.captureAnnotated, null),
+    pipelineOutput: pickFirst(item.pipeline_output, item.pipelineOutput, null),
+    raw: item,
+  };
+}
+
+/**
+ * @typedef {Object} FrameImages
+ * @property {number} frameIndex
+ * @property {string | null} capture
+ * @property {string | null} captureAnnotated
+ * @property {string | null} pipelineOutput
+ * @property {Object} raw
+ */
+
+/**
+ * @typedef {Object} JobAccepted
+ * @property {string} jobId
+ * @property {'pending'} status
+ * @property {string | null} message
+ * @property {string | null} artifactsBaseUrl
+ * @property {FrameImages[]} frames
+ */
+
+/**
+ * @typedef {Object} DetectionResult
+ * @property {string} jobId
+ * @property {'pending' | 'running' | 'complete' | 'failed'} status
+ * @property {string | null} streamUrl
+ * @property {string | null} artifactsBaseUrl
+ * @property {number | null} maxFrames
+ * @property {boolean | null} saveFrames
+ * @property {number | null} framesProcessed
+ * @property {boolean | null} accidentDetected
+ * @property {number | null} peakConfidence
+ * @property {Array} events
+ * @property {FrameImages[]} frames
+ * @property {string | null} error
+ * @property {string | null} createdAt
+ * @property {string | null} completedAt
+ */
+
 function mapDetectionEventApiToUi(item = {}) {
   const confidenceScore = numberOrNull(pickFirst(item.confidence_score, item.confidenceScore, item.confidence)) ?? 0;
   const rawScore = numberOrNull(pickFirst(item.raw_score, item.rawScore, null));
@@ -241,8 +288,19 @@ export function mapIncidentDetailApiToUi(item = {}) {
   return mapIncidentSummaryApiToUi(item);
 }
 
+/**
+ * @param {Object} item
+ * @returns {DetectionResult | JobAccepted}
+ */
 export function mapJobApiToUi(item = {}) {
   const id = pickFirst(item.job_id, item.id, '');
+  const frames = Array.isArray(item.frames)
+    ? item.frames
+        .map(mapFrameImagesApiToUi)
+        .filter((frame) => frame.frameIndex !== null)
+        .sort((a, b) => a.frameIndex - b.frameIndex)
+    : [];
+
   return {
     id,
     jobId: id,
@@ -250,6 +308,7 @@ export function mapJobApiToUi(item = {}) {
     message: pickFirst(item.message, null),
     cameraId: pickFirst(item.camera_id, item.cameraId, null),
     streamUrl: pickFirst(item.stream_url, item.streamUrl, null),
+    artifactsBaseUrl: pickFirst(item.artifacts_base_url, item.artifactsBaseUrl, null),
     maxFrames: numberOrNull(pickFirst(item.max_frames, item.maxFrames, null)),
     saveFrames: pickFirst(item.save_frames, item.saveFrames, null),
     createdAt: pickFirst(item.created_at, item.createdAt, null),
@@ -264,6 +323,7 @@ export function mapJobApiToUi(item = {}) {
     progressPercent: numberOrNull(pickFirst(item.progress_percent, item.progressPercent, item.progress, null)),
     progress: numberOrNull(pickFirst(item.progress, item.progress_percent, null)),
     events: Array.isArray(item.events) ? item.events.map(mapDetectionEventApiToUi) : [],
+    frames,
     error: item.error ?? null,
     errorMessage: pickFirst(item.error_message, item.errorMessage, null),
     raw: item,
