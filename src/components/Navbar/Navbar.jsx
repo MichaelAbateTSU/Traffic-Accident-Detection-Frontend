@@ -19,7 +19,7 @@ export default function Navbar() {
           <circle cx="21" cy="22" r="2" fill="#94a3b8"/>
           <path d="M16 8 L20 14 H12 Z" fill="#f59e0b"/>
         </svg>
-        <span className={styles.logoText}>AccidentWatch</span>
+        <span className={styles.logoText}>RoadSafeAI</span>
       </div>
 
       <nav className={styles.nav} aria-label="Main navigation">
