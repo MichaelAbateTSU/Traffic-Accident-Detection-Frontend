@@ -69,11 +69,16 @@ export function submitMonitoredDetection(payload, key, { signal } = {}) {
   });
 }
 
-async function reconcileIntents(journal, { signal, onAccepted } = {}) {
+async function reconcileIntents(journal, { signal, ownerSignal = signal, expired = () => false, onAccepted } = {}) {
   const errors = [];
   const entries = journal.read().batches.flatMap((batch) => batch.entries)
     .filter((entry) => entry.protocol === 'keyed-v1' && ['uncertain', 'not-recorded', 'expired'].includes(entry.state));
   await mapBounded(entries, async (entry) => {
+    ownerSignal?.throwIfAborted();
+    if (expired()) {
+      errors.push('Submission lookup deferred after the recovery deadline; original identity retained, acceptance remains unknown.');
+      return;
+    }
     let receipt;
     let readError;
     try {
@@ -81,13 +86,17 @@ async function reconcileIntents(journal, { signal, onAccepted } = {}) {
         signal, label: 'Looking up uncertain submission',
       });
     } catch (error) {
-      if (error.name === 'AbortError') throw error;
+      if (error.name === 'AbortError') {
+        ownerSignal?.throwIfAborted();
+        errors.push('Submission lookup timed out at the recovery deadline; original identity retained, acceptance remains unknown.');
+        return;
+      }
       readError = error;
     }
-    signal?.throwIfAborted();
+    ownerSignal?.throwIfAborted();
     if (receipt) {
       journal.accept(entry.key, receipt.item.id);
-      await onAccepted?.(receipt.item.id);
+      onAccepted?.(receipt.item);
     } else if (readError.status === 404 && readError.code === 'idempotency_key_unknown') {
       journal.recordLookup(entry.key, 'not-recorded');
     } else if (readError.status === 410 && ['idempotency_key_expired', 'idempotency_result_expired'].includes(readError.code)) {
@@ -183,6 +192,7 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
   const requestSignal = controller.signal;
   const reads = new Map();
   const listings = new Map();
+  const acceptedReads = [];
   const historyController = new AbortController();
   const cancelHistory = () => historyController.abort();
   requestSignal.addEventListener('abort', cancelHistory, { once: true });
@@ -215,7 +225,7 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
         } else {
           recovered.set(id, error.status === 404
             ? { id, status: 'unavailable', recoveringRead: false, recoveryDeferred: false, monitorError: message }
-            : { id, status: 'pending', recoveringRead: false, recoveryDeferred: false, monitorError: message });
+            : { ...recovered.get(id), id, recoveringRead: false, recoveryDeferred: false, monitorError: message });
         }
       }
       emit([recovered.get(id)]);
@@ -227,7 +237,7 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
     let page = 1;
     let more = true;
     while (more) {
-      const { items, meta } = await getMonitoredJobs({ status, page, pageSize: 100, sort: 'created_at' }, { signal: requestSignal });
+      const { items, meta } = await getMonitoredJobs({ status, page, pageSize: 100, sort: 'created_at' }, { signal: historyController.signal });
       requestSignal.throwIfAborted();
       const changed = [];
       for (const item of items) {
@@ -251,31 +261,45 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
   try {
     signal?.throwIfAborted();
     emit();
-    // Admit critical work before history can occupy browser HTTP/1.1 connections.
-    const critical = Promise.all([
-      reconcileIntents(journalApi, { signal: requestSignal, onAccepted: (id) => restore(id) }),
-      ...['pending', 'running'].map(listStatus),
-    ]);
     historyTimer = setTimeout(() => {
       historyExpired = true;
       historyController.abort();
     }, JOB_READ_TIMEOUT_MS);
-    const history = mapBounded(saved.ids, async (id) => {
+    // Receipt workers persist and emit acceptance without waiting for job reads.
+    const critical = Promise.all([
+      reconcileIntents(journalApi, {
+        signal: historyController.signal, ownerSignal: requestSignal, expired: () => historyExpired,
+        onAccepted: (item) => {
+          if (!recovered.has(item.id)) recovered.set(item.id, { ...item, recoveringRead: true });
+          emit([recovered.get(item.id)]);
+          acceptedReads.push(item.id);
+        },
+      }),
+      ...['pending', 'running'].map(listStatus),
+    ]);
+    const readHistory = async (id) => {
       if (listings.has(id) || reads.has(id)) return;
       if (historyExpired) {
         const message = `Historical job ${id} read deferred after the recovery deadline. Reference retained; outcome unknown. Retry historical recovery explicitly.`;
         errors.set(id, message);
-        recovered.set(id, { id, status: 'pending', recoveringRead: false, recoveryDeferred: true, monitorError: message });
+        recovered.set(id, { ...recovered.get(id), id, recoveringRead: false, recoveryDeferred: true, monitorError: message });
         emit([recovered.get(id)]);
         return;
       }
       await restore(id, true);
-    });
+    };
+    const history = mapBounded(saved.ids, readHistory);
     const [[submissionError]] = await Promise.all([critical, history]);
+    await mapBounded(acceptedReads, readHistory);
     const updated = journalApi.read();
     saved.warning = [saved.warning, ...submissionWarnings(updated).filter((warning) => !saved.warning?.includes(warning))].filter(Boolean).join(' ') || null;
     return { jobs: [...recovered.values()], warning: saved.warning, error: [...errors.values()].join(' ') || null,
       intents: updated, submissionError };
+  } catch (error) {
+    if (historyExpired && !requestSignal.aborted && error.name === 'AbortError') {
+      throw new Error('Job recovery timed out after its 30-second pass deadline. Active listing is incomplete; retain original references and retry read-only recovery before new submissions.');
+    }
+    throw error;
   } finally {
     clearTimeout(historyTimer);
     historyController.abort();

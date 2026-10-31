@@ -20,6 +20,7 @@ test('mounted recovery prioritizes key lookup and listings over held HTTP/1.1 hi
   const timers = new Set();
   let released = false;
   let peakHistorical = 0;
+  let receipts = 0;
   let server;
   try {
     server = await createServer({
@@ -44,7 +45,8 @@ test('mounted recovery prioritizes key lookup and listings over held HTTP/1.1 hi
             }
             export async function getSubmission(key,{signal}={}) {
               const data=await read('/receipt',signal);window.pressureCritical=data;
-              return {item:{id:'accepted',status:'complete'}};
+              window.pressureReceiptCount=(window.pressureReceiptCount||0)+1;
+              return {item:{id:data.id,status:'pending'}};
             }
             export async function submitDetection(){throw new Error('Unexpected inference POST')}
             export async function fetchArtifactBlob(){throw new Error('Unexpected artifact')}
@@ -55,7 +57,7 @@ test('mounted recovery prioritizes key lookup and listings over held HTTP/1.1 hi
           vite.middlewares.use(async (req, res, next) => {
             if (req.url.startsWith('/__pressure/')) {
               res.setHeader('Content-Type', 'application/json');
-              if (req.url.includes('/jobs/historic-')) {
+              if (req.url.includes('/jobs/historic-') || req.url.includes('/jobs/accepted-')) {
                 held.add(res);
                 peakHistorical = Math.max(peakHistorical, held.size);
                 const timer = setTimeout(() => {
@@ -64,7 +66,7 @@ test('mounted recovery prioritizes key lookup and listings over held HTTP/1.1 hi
                 }, 2000);
                 timers.add(timer);
                 res.on('close', () => { clearTimeout(timer); timers.delete(timer); held.delete(res); });
-              } else if (req.url.includes('/receipt')) res.end(JSON.stringify({ beforeRelease: !released }));
+              } else if (req.url.includes('/receipt')) res.end(JSON.stringify({ beforeRelease: !released, id: `accepted-${++receipts}` }));
               else if (req.url.includes('/listing')) res.end(JSON.stringify({ beforeRelease: !released, items: [{ id: 'active', status: 'running' }], meta: { pagination: { has_next: false } } }));
               else res.end(JSON.stringify({ item: { id: req.url.split('/').pop(), status: 'complete', framesProcessed: 120 } }));
               return;

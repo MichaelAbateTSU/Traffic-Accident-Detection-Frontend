@@ -360,6 +360,90 @@ test('large history retains unstarted IDs after one deadline and explicit retry 
   assert.equal(clock.timers.size, 0);
 });
 
+test('all keyed identities become visible before held accepted-job reads settle, with one recovery window', async () => {
+  const lookedUp = [];
+  const reads = [];
+  const { api, clock, storage } = await monitorHarness({
+    getSubmission: async (key) => {
+      lookedUp.push(key);
+      return { item: { id: `accepted-${lookedUp.length}`, status: 'pending' } };
+    },
+    getJob: async (id) => { reads.push(id); return new Promise(() => {}); },
+  });
+  const dependencies = journalDependencies({ storage });
+  const journal = dependencies.createSubmissionJournal();
+  const batch = await journal.prepareBatch(Array.from({ length: 8 }, (_, i) => `source-${i}`), {
+    maxFrames: 120, saveFrames: false, sourceKind: 'fixed-camera', protocol: 'keyed-v1',
+  });
+  for (const entry of batch.entries) journal.markSending(entry.key);
+  const { harness, submissions } = await dashboardHarness(api.recoverJobMonitor, api.getMonitoredJob, { journal: dependencies });
+  harness.render();
+  await harness.flush();
+  assert.equal(lookedUp.length, 8, 'Held job reads must never occupy receipt workers');
+  assert.equal(journal.read().batches[0].entries.filter((item) => item.state === 'accepted').length, 8);
+  assert.equal(harness.elements.filter((item) => item.type === 'JobStatusCard').length, 8);
+  assert.equal(reads.length, 2, 'Recovered status HTTP concurrency remains bounded');
+  clock.expire();
+  await harness.flush();
+  assert.ok(harness.elements.some((item) => item.props.children === 'Retry deferred historical recovery (read only)'));
+  assert.equal(submissions.length, 0);
+  harness.unmount();
+  assert.equal(clock.timers.size, 0);
+});
+
+test('held receipt lookups have one pass budget and cancellation never starts queued receipt or job reads', async () => {
+  for (const cancel of [false, true]) {
+    const lookedUp = [];
+    const { api, clock, storage } = await monitorHarness({
+      getSubmission: async (key) => { lookedUp.push(key); return new Promise(() => {}); },
+      getJob: async () => { throw new Error('Unexpected job read'); },
+    });
+    const journal = journalDependencies({ storage }).createSubmissionJournal();
+    const batch = await journal.prepareBatch(Array.from({ length: 8 }, (_, i) => `source-${i}`), {
+      maxFrames: 120, saveFrames: false, sourceKind: 'fixed-camera', protocol: 'keyed-v1',
+    });
+    for (const entry of batch.entries) journal.markSending(entry.key);
+    const controller = new AbortController();
+    const recovery = api.recoverJobMonitor({ journal, signal: controller.signal });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(lookedUp.length, 2);
+    if (cancel) {
+      controller.abort();
+      await assert.rejects(recovery, { name: 'AbortError' });
+    } else {
+      clock.expire();
+      const result = await recovery;
+      assert.match(result.submissionError, /deadline.*acceptance remains unknown/);
+    }
+    assert.equal(lookedUp.length, 2);
+    assert.ok(journal.read().batches[0].entries.every((item) => item.state === 'uncertain'));
+    assert.equal(clock.timers.size, 0);
+  }
+});
+
+test('receipt terminal outcomes remain confirmed when their subsequent status GETs time out', async () => {
+  let count = 0;
+  const { api, clock, storage } = await monitorHarness({
+    getSubmission: async () => ({ item: { id: `terminal-${++count}`, status: count === 1 ? 'complete' : 'failed' } }),
+    getJob: async () => new Promise(() => {}),
+  });
+  const journal = journalDependencies({ storage }).createSubmissionJournal();
+  const batch = await journal.prepareBatch(['one', 'two'], {
+    maxFrames: 120, saveFrames: false, sourceKind: 'fixed-camera', protocol: 'keyed-v1',
+  });
+  for (const entry of batch.entries) journal.markSending(entry.key);
+  const progress = [];
+  const recovering = api.recoverJobMonitor({ journal, onJobs: ({ jobs }) => progress.push(...jobs) });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(progress.some((item) => item.status === 'complete'));
+  assert.ok(progress.some((item) => item.status === 'failed'));
+  clock.expire();
+  const result = await recovering;
+  assert.deepEqual([...result.jobs.map((item) => item.status)], ['complete', 'failed']);
+  assert.ok(result.jobs.every((item) => /timed out/.test(item.monitorError)));
+  assert.equal(clock.timers.size, 0);
+});
+
 test('Dashboard does not poll the deferred history queue and its read-only retry restores those references', async () => {
   let responsive = false;
   const reads = [];
@@ -639,7 +723,7 @@ test('a paginated listing timeout blocks submission and preserves storage until 
   await harness.flush();
   clock.expire();
   await harness.flush();
-  assert.match(JSON.stringify(harness.elements), /pending jobs \(page 2\).*timed out/);
+  assert.match(JSON.stringify(harness.elements), /Job recovery timed out.*Active listing is incomplete/);
   assert.equal(signal.aborted, true);
   assert.equal(persisted.length, 0);
   assert.equal([...storage.values()][0], originalStorage);
