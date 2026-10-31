@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import CameraPlayer from '../CameraPlayer/CameraPlayer.jsx';
 import StatusBadge from '../StatusBadge/StatusBadge.jsx';
 import { formatDateTime } from '../../utils/formatters.js';
+import { cameraJobStatusLabel } from '../../utils/cameraJobStatus.js';
 import styles from './CameraCard.module.css';
 
 /**
@@ -19,7 +20,11 @@ export default function CameraCard({ camera }) {
 
   useEffect(() => {
     const node = cardRef.current;
-    if (!node || camera.status === 'offline') return undefined;
+    if (!node) return undefined;
+    if (typeof IntersectionObserver === 'undefined') {
+      setIsVisible(true);
+      return undefined;
+    }
 
     const observer = new IntersectionObserver(
       ([entry]) => setIsVisible(entry.isIntersecting),
@@ -28,12 +33,11 @@ export default function CameraCard({ camera }) {
     observer.observe(node);
 
     return () => observer.disconnect();
-  }, [camera.status]);
+  }, []);
 
   const streamHref = camera.streamUrl ?? camera.stream_url ?? null;
   const lastSeen = camera.lastSeenAt ?? camera.last_seen_at ?? null;
-  const isOffline = camera.status === 'offline';
-  const shouldLoadVideo = !isOffline && Boolean(streamHref) && (isVisible || isHovered);
+  const shouldLoadVideo = Boolean(streamHref) && (isVisible || isHovered);
 
   useEffect(() => {
     if (shouldLoadVideo) {
@@ -76,13 +80,7 @@ export default function CameraCard({ camera }) {
       }}
     >
       <div className={styles.imageWrapper}>
-        {isOffline && (
-          <div className={styles.placeholder}>
-            <span className={styles.errorText}>Camera Offline</span>
-            {lastSeen && <span className={styles.loadingText}>Last seen: {formatDateTime(lastSeen)}</span>}
-          </div>
-        )}
-        {!isOffline && shouldLoadVideo && (
+        {shouldLoadVideo && (
           <CameraPlayer
             src={streamHref}
             active={shouldLoadVideo}
@@ -93,19 +91,19 @@ export default function CameraCard({ camera }) {
             videoClassName={styles.frame}
           />
         )}
-        {!isOffline && playerLoading && (
+        {playerLoading && (
           <div className={styles.placeholder}>
             <span className={styles.loadingText}>Loading live preview...</span>
           </div>
         )}
-        {!isOffline && !shouldLoadVideo && (
+        {!shouldLoadVideo && (
           <div className={styles.placeholder}>
-            <span className={styles.loadingText}>Preview paused</span>
+            <span className={styles.loadingText}>{streamHref ? 'Raw preview paused' : 'No raw stream configured'}</span>
           </div>
         )}
-        {!isOffline && playerError && !playerLoading && (
+        {playerError && (
           <div className={styles.placeholder}>
-            <span className={styles.errorText}>Feed unavailable</span>
+            <span className={styles.errorText} role="alert">Raw playback error: {playerError}</span>
           </div>
         )}
         <div className={styles.hoverOverlay}>
@@ -117,12 +115,13 @@ export default function CameraCard({ camera }) {
         <div className={styles.info}>
           <span className={styles.cameraId}>{camera.id}</span>
           {camera.name && <span className={styles.cameraName}>{camera.name}</span>}
-          {lastSeen && <span className={styles.cameraName}>Last seen: {formatDateTime(lastSeen)}</span>}
+          <span className={styles.cameraName}>Raw stream, not YOLO-processed</span>
+          {lastSeen && <span className={styles.cameraName}>Job timestamp: {formatDateTime(lastSeen)}</span>}
         </div>
         <div className={styles.meta}>
-          <StatusBadge status={camera.status} />
-          {camera.status !== 'offline' && camera.fps != null && (
-            <span className={styles.fps}>{camera.fps} fps</span>
+          <StatusBadge status={camera.status ?? 'unknown'} label={cameraJobStatusLabel(camera.status)} />
+          {camera.fps != null && (
+            <span className={styles.fps}>Job FPS: {camera.fps}</span>
           )}
         </div>
       </div>

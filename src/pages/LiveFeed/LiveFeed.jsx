@@ -15,7 +15,7 @@ function mapFixedCameras(statusById = new Map(), statusByStreamUrl = new Map()) 
       id,
       name: id,
       streamUrl: streamUrl,
-      status: statusItem?.status ?? 'online',
+      status: statusItem?.status ?? 'unknown',
       fps: statusItem?.fps ?? null,
       lastSeenAt: statusItem?.lastSeenAt ?? null,
       lastJobId: statusItem?.lastJobId ?? null,
@@ -34,9 +34,11 @@ export default function LiveFeed() {
 
   useEffect(() => {
     const controller = new AbortController();
+    let mounted = true;
     async function load() {
       try {
         const { items, meta: metaValue } = await getCameraStatus({ signal: controller.signal });
+        if (!mounted) return;
         const statusById = new Map(
           items.map((item) => [String(item.id), item]),
         );
@@ -50,30 +52,40 @@ export default function LiveFeed() {
         setLastUpdatedAt(new Date().toISOString());
         setError(null);
       } catch (err) {
-        if (err.name === 'AbortError') return;
+        if (err.name === 'AbortError' || !mounted) return;
         setCameras(mapFixedCameras());
         setError(err.message);
       } finally {
-        setLoading(false);
+        if (mounted) setLoading(false);
       }
     }
     load();
-    return () => controller.abort();
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
   }, [refreshKey]);
+
+  useEffect(() => {
+    if (!pollInterval) return undefined;
+    const interval = setInterval(() => setRefreshKey(value => value + 1), pollInterval);
+    return () => clearInterval(interval);
+  }, [pollInterval]);
 
   const onlineCount = cameras.filter((camera) => camera.status === 'online').length;
   const warningCount = cameras.filter((camera) => camera.status === 'warning').length;
   const offlineCount = cameras.filter((camera) => camera.status === 'offline').length;
+  const unknownCount = cameras.length - onlineCount - warningCount - offlineCount;
 
   return (
     <main className={styles.page}>
       <div className={styles.header}>
         <div>
           <h1 className={styles.title}>Live Feed</h1>
-          <span className={styles.subtitle}>Real-time YOLO-processed camera streams</span>
+          <span className={styles.subtitle}>Raw camera playback, not YOLO-processed. Status reflects the latest retained detection job, not source health. Untested sources are unknown; playback may fail independently.</span>
         </div>
         <div className={styles.controls}>
-          <label htmlFor="poll-interval" className={styles.controlLabel}>Refresh</label>
+          <label htmlFor="poll-interval" className={styles.controlLabel}>Job status refresh</label>
           <select
             id="poll-interval"
             className={styles.select}
@@ -87,7 +99,7 @@ export default function LiveFeed() {
             <option value={0}>Manual</option>
           </select>
           <button type="button" className={styles.refreshBtn} onClick={() => setRefreshKey((value) => value + 1)}>
-            Refresh status
+            Refresh job status
           </button>
         </div>
       </div>
@@ -96,27 +108,28 @@ export default function LiveFeed() {
         <div className={styles.summary}>
           <span className={styles.summaryItem}>
             <span className={styles.dot} data-status="online" />
-            {onlineCount} Online
+            {onlineCount} Jobs pending/running
           </span>
           {warningCount > 0 && (
             <span className={styles.summaryItem}>
               <span className={styles.dot} data-status="warning" />
-              {warningCount} Warning
+              {warningCount} Jobs failed
             </span>
           )}
           {offlineCount > 0 && (
             <span className={styles.summaryItem}>
               <span className={styles.dot} data-status="offline" />
-              {offlineCount} Offline
+              {offlineCount} Jobs complete
             </span>
           )}
+          <span className={styles.summaryItem}>{unknownCount} Job states unknown</span>
           {lastUpdatedAt && <span className={styles.summaryItem}>Updated: {formatDateTime(lastUpdatedAt)}</span>}
         </div>
       )}
 
       <DataState
         loading={loading}
-        error={error}
+        error={null}
         isEmpty={!cameras.length}
         emptyMessage="No cameras configured."
         onRetry={() => setRefreshKey((value) => value + 1)}
@@ -124,9 +137,10 @@ export default function LiveFeed() {
         loadingVariant="skeleton"
         loadingRows={4}
       >
+        {error && <p role="alert">Job status refresh failed: {error}. Raw playback can still be attempted; source health is unknown.</p>}
         <div className={styles.grid}>
           {cameras.map((camera) => (
-            <CameraCard key={camera.id} camera={camera} pollInterval={pollInterval} />
+            <CameraCard key={camera.id} camera={camera} />
           ))}
         </div>
       </DataState>

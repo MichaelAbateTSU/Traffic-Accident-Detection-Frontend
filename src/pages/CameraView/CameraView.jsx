@@ -6,6 +6,7 @@ import AuthenticatedImage from '../../components/AuthenticatedImage/Authenticate
 import { getStreamUrlForCameraId } from '../../constants/cameras.js';
 import { getCameraLatestFrame, getCameraStatus } from '../../services/api.js';
 import { formatDateTime } from '../../utils/formatters.js';
+import { cameraJobStatusLabel } from '../../utils/cameraJobStatus.js';
 import styles from './CameraView.module.css';
 
 function pickCameraById(items, cameraId) {
@@ -28,7 +29,7 @@ export default function CameraView() {
     id: cameraId,
     name: state.name ?? cameraId,
     streamUrl: state.streamUrl ?? fallbackStreamUrl,
-    status: state.status ?? 'online',
+    status: state.status ?? 'unknown',
     fps: state.fps ?? null,
     lastSeenAt: state.lastSeenAt ?? null,
   });
@@ -77,6 +78,8 @@ export default function CameraView() {
         if (cancelled) return;
         const statusItem = pickCameraById(items, cameraId);
         if (!statusItem) {
+          setCamera(prev => ({ ...prev, status: 'unknown', fps: null, lastSeenAt: null }));
+          setError(null);
           setLoading(false);
           return;
         }
@@ -85,14 +88,17 @@ export default function CameraView() {
           id: statusItem.id,
           name: statusItem.name ?? prev.name,
           streamUrl: statusItem.streamUrl ?? prev.streamUrl ?? fallbackStreamUrl,
-          status: statusItem.status ?? prev.status,
-          fps: statusItem.fps ?? prev.fps,
-          lastSeenAt: statusItem.lastSeenAt ?? prev.lastSeenAt,
+          status: statusItem.status ?? 'unknown',
+          fps: statusItem.fps ?? null,
+          lastSeenAt: statusItem.lastSeenAt ?? null,
         }));
         setError(null);
       } catch (err) {
         if (err.name === 'AbortError') return;
-        if (!cancelled) setError(err.message);
+        if (!cancelled) {
+          setError(err.message);
+          setCamera(prev => ({ ...prev, status: 'unknown' }));
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -115,7 +121,7 @@ export default function CameraView() {
         id: cameraId,
         name: state.name ?? sameCamera.name ?? cameraId,
         streamUrl: state.streamUrl ?? sameCamera.streamUrl ?? fallbackStreamUrl,
-        status: state.status ?? sameCamera.status ?? 'online',
+        status: state.status ?? sameCamera.status ?? 'unknown',
         fps: state.fps ?? sameCamera.fps ?? null,
         lastSeenAt: state.lastSeenAt ?? sameCamera.lastSeenAt ?? null,
       };
@@ -123,8 +129,12 @@ export default function CameraView() {
   }, [cameraId, fallbackStreamUrl, state.fps, state.lastSeenAt, state.name, state.status, state.streamUrl]);
 
   const hasStream = Boolean(camera.streamUrl);
-  const isOffline = camera.status === 'offline';
-  const canPlay = hasStream && !isOffline;
+  const canPlay = hasStream;
+
+  useEffect(() => {
+    setPlayerError(null);
+    setPlayerLoading(false);
+  }, [camera.streamUrl]);
 
   const handleBack = () => {
     if (window.history.length > 1) {
@@ -174,8 +184,8 @@ export default function CameraView() {
         )}
         {!canPlay && (
           <div className={styles.offlinePanel}>
-            <h2>Camera Offline</h2>
-            <p>{camera.lastSeenAt ? `Last seen: ${formatDateTime(camera.lastSeenAt)}` : 'No recent heartbeat available.'}</p>
+            <h2>No raw stream configured</h2>
+            <p>Detection-job status does not establish live source availability.</p>
           </div>
         )}
 
@@ -185,20 +195,21 @@ export default function CameraView() {
           </button>
           <div className={styles.titleGroup}>
             <h1>{camera.name ?? camera.id}</h1>
-            <StatusBadge status={camera.status} />
+            <StatusBadge status={camera.status} label={cameraJobStatusLabel(camera.status)} />
           </div>
           <div className={styles.meta}>
-            {camera.fps != null && <span>FPS: {camera.fps}</span>}
-            {camera.lastSeenAt && <span>Last seen: {formatDateTime(camera.lastSeenAt)}</span>}
-            {loading && <span>Refreshing status...</span>}
+            {camera.fps != null && <span>Job FPS: {camera.fps}</span>}
+            <span>Raw live playback, not YOLO-processed; job state is not source health.</span>
+            {camera.lastSeenAt && <span>Job timestamp: {formatDateTime(camera.lastSeenAt)}</span>}
+            {loading && <span>Refreshing job status...</span>}
             {playerLoading && <span>Initializing stream...</span>}
-            {playerError && <span className={styles.error}>{playerError}</span>}
-            {error && <span className={styles.error}>Status refresh failed</span>}
+            {playerError && <span className={styles.error} role="alert">Raw playback error: {playerError}</span>}
+            {error && <span className={styles.error} role="alert">Job status refresh failed: {error}</span>}
           </div>
         </div>
 
         <aside className={styles.latestFrame} aria-label="Latest detection frame">
-          <span className={styles.latestFrameTitle}>Latest detection frame</span>
+          <span className={styles.latestFrameTitle}>Latest saved YOLO-processed frame (not a live stream)</span>
           {latestFrameError && (
             <span className={styles.error} role="alert">
               Latest frame refresh failed: {latestFrameError}
@@ -216,7 +227,7 @@ export default function CameraView() {
           {latestFrame && (
             <span className={styles.latestFrameMeta}>
               Frame {latestFrame.frameIndex ?? '—'}
-              {latestFrame.capturedAt ? ` · ${formatDateTime(latestFrame.capturedAt)}` : ''}
+              {latestFrame.capturedAt ? ` · job-derived timestamp ${formatDateTime(latestFrame.capturedAt)}` : ''}
               {latestFrame.jobStatus ? ` · job ${latestFrame.jobStatus}` : ''}
             </span>
           )}

@@ -467,12 +467,12 @@ export default function Dashboard() {
       >
         <section className={styles.statsGrid} aria-label="Statistics">
           <StatCard
-            label="Active Cameras"
+            label="Job Sources Pending/Running"
             value={stats ? `${stats.activeCameras}/${stats.totalCameras}` : '—'}
             icon="CAM"
-            trend={stats?.activeCameras === stats?.totalCameras ? 'All online' : 'Degraded'}
-            variant={stats?.activeCameras === stats?.totalCameras ? 'good' : 'warn'}
-            description="Cameras currently online"
+            trend={stats?.totalCameras > 0 ? 'Job-derived counts' : 'No retained job sources'}
+            variant="neutral"
+            description="Distinct retained job sources with pending/running latest jobs / all retained job sources; not cameras online or raw-stream availability."
           />
           <StatCard
             label="Alarm Frames Today"
@@ -694,8 +694,8 @@ export default function Dashboard() {
       </SectionCard>
 
       <SectionCard
-        title="Live Cameras"
-        description={`Top ${previewCameras.length} cameras from the current dashboard health snapshot`}
+        title="Job Sources"
+        description={`Top ${previewCameras.length} sources from retained job history; raw playback health is not measured.`}
         action={<Link to="/live" className={styles.viewAll}>Open full feed</Link>}
       >
         <div className={styles.cameraGrid}>

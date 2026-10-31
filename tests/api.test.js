@@ -23,6 +23,16 @@ async function loadApi(env, globals = {}) {
   return module.namespace;
 }
 
+test('missing camera job status maps to unknown without changing known wire values', async () => {
+  const api = await loadApi({});
+  for (const status of [undefined, null, '', 'unrecognized']) {
+    assert.equal(api.mapCameraApiToUi({ status }).status, 'unknown');
+  }
+  for (const status of ['online', 'offline', 'warning']) {
+    assert.equal(api.mapCameraApiToUi({ status }).status, status);
+  }
+});
+
 test('production requests fail closed without a backend URL', async () => {
   const api = await loadApi({ PROD: true }, {
     fetch() { assert.fail('Invalid deployment must not make network requests'); },

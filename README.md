@@ -168,12 +168,16 @@ Event `timestamp_sec` is displayed as **processing elapsed time**: wall-clock se
 
 Saved-frame galleries in the Dashboard and job cards display three frames (nine images) per page, with Previous/Next and direct page selection preserving access to all 300 frames per job. Progressive polling updates the available pages without changing the selected page. Lazy images start authenticated blob requests only when near the viewport; changing pages unmounts images, aborts requests, and revokes object URLs. Browsers without IntersectionObserver still fetch only the bounded rendered page.
 
+**Raw playback versus detection-job state:** Live Feed and Camera View attempt configured raw camera streams independently of the latest detection job. `/cameras/status` wire values are job-derived: `online` means pending/running, `warning` means failed, and `offline` means complete. Missing records/status are displayed as unknown, never assumed online. These values do not measure source health; completion/failure cannot disable raw playback. Browser/HLS/media failures are surfaced separately, and video controls permit manual playback when autoplay is blocked. Raw source requests never carry the operator token and may fail independently because of browser support, CORS or the source host.
+
+Dashboard source counts describe distinct retained job sources, not cameras proven online; `0/0` means no retained job sources. Camera timestamps are job-derived timestamps, not source heartbeats or evidence of live availability. The Camera View's authenticated latest saved YOLO-processed frame is a separate bounded-job artifact, not a continuous processed live stream. Live Feed refreshes job metadata only, not source-health probes.
+
 ## Pages
 
 | Route | Page | Description |
 |---|---|---|
 | `/` | Dashboard | Stats overview + recent alarm-frame records |
-| `/live` | Live Feed | Camera grid with polling |
+| `/live` | Live Feed | Raw camera playback grid with detection-job metadata refresh |
 | `/incidents` | Alarm Frames | Full alarm-frame record table with status filters, manual overrides, CSV export |
-| `/camera/:id` | Camera View | Full-screen stream with latest detection frame |
+| `/camera/:id` | Camera View | Raw stream playback and separate latest saved YOLO frame |
 | `/settings` | Settings | API URL, poll interval, thresholds |
