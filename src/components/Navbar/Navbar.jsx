@@ -4,7 +4,7 @@ import styles from './Navbar.module.css';
 const NAV_LINKS = [
   { to: '/',          label: 'Dashboard' },
   { to: '/live',      label: 'Live Feed'  },
-  { to: '/incidents', label: 'Incidents'  },
+  { to: '/incidents', label: 'Alarm Frames'  },
   { to: '/settings',  label: 'Settings'   },
 ];
 
@@ -39,7 +39,7 @@ export default function Navbar() {
 
       <div className={styles.status}>
         <span className={styles.statusDot} aria-hidden="true" />
-        <span className={styles.statusLabel}>System Active</span>
+        <span className={styles.statusLabel}>Operator Dashboard</span>
       </div>
     </header>
   );

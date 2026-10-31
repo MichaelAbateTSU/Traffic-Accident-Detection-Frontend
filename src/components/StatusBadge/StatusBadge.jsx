@@ -4,8 +4,9 @@ import styles from './StatusBadge.module.css';
  * StatusBadge
  * @param {string} status
  * @param {string} [label] — overrides the default label derived from status
+ * @param {boolean} [neutral] — neutral presentation without changing status semantics
  */
-export default function StatusBadge({ status = 'offline', label }) {
+export default function StatusBadge({ status = 'offline', label, neutral = false }) {
   const normalized = String(status ?? '').toLowerCase();
   const mappedStatus = mapStatus(normalized);
   const defaultLabels = {
@@ -23,7 +24,7 @@ export default function StatusBadge({ status = 'offline', label }) {
   const displayLabel = label ?? defaultLabels[mappedStatus] ?? status;
 
   return (
-    <span className={[styles.badge, styles[mappedStatus]].join(' ')}>
+    <span className={[styles.badge, styles[neutral ? 'idle' : mappedStatus]].join(' ')}>
       <span className={styles.dot} aria-hidden="true" />
       {displayLabel}
     </span>

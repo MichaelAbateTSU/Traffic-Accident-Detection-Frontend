@@ -37,7 +37,7 @@ export default function IncidentTable({
   compact = false,
   onRowClick,
   selectedIncidentId = null,
-  emptyMessage = 'No incidents recorded.',
+  emptyMessage = 'No alarm-frame records.',
 }) {
   const [sortKey,  setSortKey]  = useState('timestamp');
   const [sortDir,  setSortDir]  = useState('desc');
@@ -86,6 +86,7 @@ export default function IncidentTable({
   return (
     <div className={styles.wrapper}>
       <p>Heuristic accident scores range from 0 to 1; they are not calibrated probabilities.</p>
+      <p>Each row is an alarm frame, not a unique or confirmed accident. Consecutive rows may be one episode. Record status defaults to active while the job is pending/running and resolved when it finishes, unless manually overridden. Neither status confirms review, accident resolution or a live alarm.</p>
       <table className={styles.table}>
         <thead>
           <tr>
@@ -94,7 +95,7 @@ export default function IncidentTable({
               Time <SortIcon col="timestamp" />
             </th>
             <th className={styles.th}>Camera</th>
-            {!compact && <th className={styles.th}>Incident / Job</th>}
+            {!compact && <th className={styles.th}>Record / Job</th>}
             <th className={[styles.th, styles.sortable].join(' ')} onClick={() => handleSort('type')}>
               Type <SortIcon col="type" />
             </th>
@@ -102,7 +103,7 @@ export default function IncidentTable({
               Heuristic accident score (0-1) <SortIcon col="confidence" />
             </th>
             {!compact && <th className={styles.th}>Raw heuristic score (0-1)</th>}
-            <th className={styles.th}>Status</th>
+            <th className={styles.th}>Record status</th>
           </tr>
         </thead>
         <tbody>
@@ -171,7 +172,7 @@ export default function IncidentTable({
               <td className={styles.td}>
                 <StatusBadge
                   status={incident.resolved ? 'resolved' : 'critical'}
-                  label={incident.resolved ? 'Resolved' : 'Active'}
+                  label={incident.resolved ? 'Record resolved' : 'Record active'}
                 />
               </td>
             </tr>

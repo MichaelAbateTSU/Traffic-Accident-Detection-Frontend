@@ -26,12 +26,39 @@ export default function CameraPlayer({
 
     let hls;
     let cancelled = false;
+    onFatalError?.('');
+    onLoadingChange?.(false);
 
     const setLoading = (value) => {
       if (!cancelled) onLoadingChange?.(value);
     };
+    const play = () => {
+      video.play().catch(error => {
+        if (cancelled || error.name === 'AbortError') return;
+        setLoading(false);
+        onFatalError?.(error.name === 'NotAllowedError'
+          ? (preview
+            ? 'Autoplay blocked. Open the raw stream for manual playback.'
+            : 'Autoplay blocked. Use the video controls to start raw playback.')
+          : `Raw playback failed: ${error.message}`);
+      });
+    };
+    const handleVideoError = () => {
+      if (cancelled) return;
+      setLoading(false);
+      onFatalError?.('Failed to load raw camera stream.');
+    };
+    const handlePlaying = () => {
+      if (cancelled) return;
+      setLoading(false);
+      onFatalError?.('');
+    };
+    video.addEventListener('error', handleVideoError);
+    video.addEventListener('playing', handlePlaying);
 
     const cleanup = () => {
+      video.removeEventListener('error', handleVideoError);
+      video.removeEventListener('playing', handlePlaying);
       if (hls) {
         hls.destroy();
         hls = null;
@@ -55,20 +82,13 @@ export default function CameraPlayer({
     // Safari can play HLS natively, so no hls.js attachment is needed.
     if (video.canPlayType('application/vnd.apple.mpegurl')) {
       const handleReady = () => setLoading(false);
-      const handleError = () => {
-        setLoading(false);
-        onFatalError?.('Failed to load camera stream.');
-      };
-
       video.addEventListener('loadeddata', handleReady);
-      video.addEventListener('error', handleError);
       video.src = src;
-      video.play().catch(() => {});
+      play();
 
       return () => {
         cancelled = true;
         video.removeEventListener('loadeddata', handleReady);
-        video.removeEventListener('error', handleError);
         cleanup();
       };
     }
@@ -76,6 +96,7 @@ export default function CameraPlayer({
     if (!Hls.isSupported()) {
       setLoading(false);
       onFatalError?.('HLS is not supported in this browser.');
+      cleanup();
       return undefined;
     }
 
@@ -88,10 +109,11 @@ export default function CameraPlayer({
     });
 
     hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
+      if (cancelled) return;
       if (preview && data.levels?.length) {
         hls.startLevel = 0;
       }
-      video.play().catch(() => {});
+      play();
     });
 
     hls.on(Hls.Events.LEVEL_LOADED, () => {
@@ -99,7 +121,7 @@ export default function CameraPlayer({
     });
 
     hls.on(Hls.Events.ERROR, (_, data) => {
-      if (data?.fatal) {
+      if (!cancelled && data?.fatal) {
         setLoading(false);
         onFatalError?.(data.details || 'Unable to play camera stream.');
       }
@@ -116,7 +138,7 @@ export default function CameraPlayer({
 
   return (
     <div className={[styles.player, className].join(' ').trim()}>
-      <video ref={videoRef} className={[styles.video, videoClassName].join(' ').trim()} />
+      <video ref={videoRef} controls={!preview} className={[styles.video, videoClassName].join(' ').trim()} />
     </div>
   );
 }

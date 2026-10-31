@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { componentHarness, deferred } from './componentHarness.js';
 import { FIXED_CAMERA_STREAM_URLS } from '../src/constants/cameras.js';
+import { cameraJobStatusLabel } from '../src/utils/cameraJobStatus.js';
 
 const formatters = { formatDateTime: String, formatNumber: String, formatPercent: String };
 const incidentA = { id: 'A', cameraId: 'camera-A', note: 'note A', resolved: false, status: 'active' };
@@ -11,6 +12,7 @@ test('camera selection hides previous images immediately and ignores stale frame
   let cameraId = 'A';
   const requests = [];
   const harness = await componentHarness('../src/pages/CameraView/CameraView.jsx', {
+    '../../utils/cameraJobStatus.js': { cameraJobStatusLabel },
     '../../components/AuthenticatedImage/AuthenticatedImage.jsx': { default: 'img' },
     'react-router-dom': {
       Link: 'Link', useNavigate: () => () => {},
