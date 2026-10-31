@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getDashboard, getHealth, getJobs, getStats } from '../services/api.js';
 
-export function useDashboardData({ incidentsPageSize = 5, incidentsStatus = 'active', historyDays = 30 } = {}) {
+export function useDashboardData({ incidentsPageSize = 5, incidentsStatus = 'all', historyDays = 30 } = {}) {
   const [stats, setStats] = useState(null);
   const [overviewMeta, setOverviewMeta] = useState(null);
   const [incidents, setIncidents] = useState([]);

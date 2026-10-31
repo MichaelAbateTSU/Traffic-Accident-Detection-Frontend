@@ -177,7 +177,7 @@ export default function Settings() {
                 checked={form.enableAlerts}
                 onChange={handleChange}
               />
-              <span>Enable in-app alert banners for new incidents</span>
+              <span>Enable in-app alert banners for new alarm-frame records</span>
             </label>
           </div>
         </section>
