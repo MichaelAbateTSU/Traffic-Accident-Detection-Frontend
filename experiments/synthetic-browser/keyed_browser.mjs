@@ -27,6 +27,9 @@ let legacyBoundary = false;
 let olderDetailFault, gatedIdentity, gatedLookupId;
 let olderDetailVerified = false;
 let activeListFault, noSavedIdListVerified = false;
+let originalOrderingId;
+const otherListResponses = new Map();
+let otherListExpired = false;
 function container(script) {
   return JSON.parse(execFileSync('docker', ['exec', 'r2-browser-api', 'python', '-c', script],
     { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] }));
@@ -78,6 +81,35 @@ try {
         if (!permitted) {
           externalBlocked++;
           await send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' });
+          return;
+        }
+        if (activeListFault && new URL(event.request.url).pathname === '/jobs' &&
+            event.request.method === 'GET' && gatedIdentity) {
+          if (event.responseStatusCode == null) {
+            await send('Fetch.continueRequest', { requestId: event.requestId, interceptResponse: true });
+            return;
+          }
+          if (event.responseStatusCode === 200) {
+            const payload = await send('Fetch.getResponseBody', { requestId: event.requestId });
+            const list = JSON.parse(payload.base64Encoded ?
+              Buffer.from(payload.body, 'base64').toString('utf8') : payload.body);
+            if (list.data?.some(job=>job.job_id === originalOrderingId)) {
+              const status = new URL(event.request.url).searchParams.get('status');
+              if (!activeListFault.held && ['pending', 'running'].includes(status)) {
+                await activeListFault.paused(event);
+                return;
+              }
+              const timer = setTimeout(() => {
+                otherListExpired = true;
+                otherListResponses.delete(event.requestId);
+                send('Fetch.continueResponse', { requestId: event.requestId })
+                  .catch(error=>interceptionFailures.push(error.name));
+              }, 20000);
+              otherListResponses.set(event.requestId, timer);
+              return;
+            }
+          }
+          await send('Fetch.continueResponse', { requestId: event.requestId });
           return;
         }
         if (event.request.url === `${api}/detection-submissions/v1` &&
@@ -180,13 +212,23 @@ try {
       })()`);
       const firstIndex = job.frames[page * 3].frame_index;
       await wait(`${gallery}.querySelector("h4")?.textContent===${JSON.stringify(`Frame ${firstIndex}`)}`);
-      await wait(`${gallery}.querySelectorAll("img").length===9`);
+      await wait(`${gallery}.querySelectorAll("figure").length===9`);
       for (let image = 0; image < 9; image++) {
-        await evaluate(`${gallery}.querySelectorAll("img")[${image}].scrollIntoView()`);
+        const figure = `${gallery}.querySelectorAll("figure")[${image}]`;
+        await evaluate(`${figure}.scrollIntoView()`);
+        await wait(`Boolean(${figure}.querySelector("img"))`);
+        await evaluate(`${figure}.querySelector("img").scrollIntoView()`);
         await wait(`(() => {
-          const image=${gallery}.querySelectorAll("img")[${image}];
+          const image=${figure}.querySelector("img");
           return image?.src.startsWith("blob:")&&image.complete&&image.naturalWidth>0;
         })()`);
+        const frame = job.frames[page * 3 + Math.floor(image / 3)];
+        const field = ['capture', 'capture_annotated', 'pipeline_output'][image % 3];
+        const caption = ['Original', 'Annotated', 'Pipeline output'][image % 3];
+        assert.equal(await evaluate(`${figure}.querySelector("figcaption").textContent.trim()`), caption);
+        assert.deepEqual(await evaluate(`window.currentObjectUrlSources.get(${figure}.querySelector("img").src)`),
+          { url: frame[field], authenticated: true },
+          'Currently rendered object URL does not match the original frame variant');
         decoded++;
       }
       for (const frame of job.frames.slice(page * 3, page * 3 + 3)) {
@@ -215,11 +257,32 @@ try {
   await send('Page.enable');
   await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
     const original=window.fetch;
+    const blobs=new WeakMap();
+    window.currentObjectUrlSources=new Map();
+    const create=URL.createObjectURL.bind(URL),revoke=URL.revokeObjectURL.bind(URL);
+    URL.createObjectURL=function(blob) {
+      const url=create(blob),source=blobs.get(blob);
+      if(source)window.currentObjectUrlSources.set(url,source);
+      return url;
+    };
+    URL.revokeObjectURL=function(url) {
+      window.currentObjectUrlSources.delete(url);
+      return revoke(url);
+    };
     window.submissionTransportObservation={statuses:[],rejections:0};
     window.fetch=async function(input,options) {
       const submission=String(input).endsWith('/detection-submissions/v1')&&options?.method==='POST';
       try {
         const response=await original.apply(this,arguments);
+        if(String(input).startsWith(${JSON.stringify(`${api}/artifacts/`)})) {
+          const blob=response.blob.bind(response);
+          const authenticated=new Headers(options?.headers).get('Authorization')===${JSON.stringify(`Bearer ${token}`)};
+          response.blob=async function() {
+            const value=await blob();
+            blobs.set(value,{url:String(input),authenticated});
+            return value;
+          };
+        }
         if(submission)window.submissionTransportObservation.statuses.push(response.status);
         return response;
       } catch(error) {
@@ -260,6 +323,7 @@ try {
       const originalReceipt = await request('/detection-submissions/v1', originalKey);
       assert.equal(originalReceipt.status, 200);
       const originalId = originalReceipt.body.job_id;
+      originalOrderingId = originalId;
       const withoutSavedId = orderingCase === 'uncertain-no-id-list';
       await seedUncertainIdentity(originalKey, originalId, !withoutSavedId);
       if (withoutSavedId) {
@@ -287,6 +351,8 @@ try {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
       assert.equal(genuineComplete, true, 'Genuine inference exceeded bounded detail interleaving');
+      if (withoutSavedId) assert.equal(fullJobRequests.get(`${api}/jobs/${originalId}`) || 0, beforeFullReads,
+        'A listing revealed the job identity before its terminal receipt');
       gatedIdentity = undefined;
       await send('Fetch.continueRequest', { requestId: gatedLookupId });
       await wait(`${cardExpression(originalId)}?.textContent.includes("Status: done")`, 5000);
@@ -301,6 +367,12 @@ try {
         inspect();
       })()`);
       await orderingFault.release();
+      assert.equal(otherListExpired, false);
+      for (const [requestId, timer] of otherListResponses) {
+        clearTimeout(timer);
+        await send('Fetch.continueResponse', { requestId });
+      }
+      otherListResponses.clear();
       await orderingFault.cleanup();
       olderDetailFault = undefined;
       activeListFault = undefined;
@@ -455,6 +527,7 @@ try {
       admissionResponsesDroppedBeforeBrowserHeaders: loss.counts.admittedResponsesDropped,
       actualOlderActiveDetailAfterTerminalReceipt: olderDetailVerified,
       actualUncertainNoSavedIdStaleListFullResult: noSavedIdListVerified,
+      currentRenderedFrameVariantCorrelation: true,
       savedImagesDecoded: allSavedImages, artifactNoTokenStatus: badAuth, artifactTokenStatus: frameAuth,
       recoveryStoragePrivate: true,
       cumulativeInventory: inferenceInventory(), schedulingObservationMs: 2000,
@@ -472,5 +545,9 @@ try {
   await sparseFault?.cleanup();
   await olderDetailFault?.cleanup();
   await activeListFault?.cleanup();
+  for (const [requestId, timer] of otherListResponses) {
+    clearTimeout(timer);
+    await send('Fetch.continueResponse', { requestId });
+  }
   ws?.close();
 }
