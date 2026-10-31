@@ -339,6 +339,63 @@ test('late acceptance plus both persistence failures emits a non-secret diagnost
   assert.ok(![...data.values()].join('').includes('signature'));
 });
 
+test('late exact-key replay reports selective journal failure even when monitor writes succeed', async () => {
+  const { api, failWrites, data } = journalHarness();
+  const batch = await api.prepareBatch([payload.stream_url], options);
+  const key = batch.entries[0].key;
+  api.markSending(key);
+  const pending = deferred();
+  const diagnostics = [];
+  const saved = [];
+  const view = await dashboard(api, {
+    post: () => pending.promise,
+    recovered: [{ id: 'pre-journal-old', status: 'unavailable' }],
+    saveJobMonitor: (ids, warning) => saved.push({ ids: [...ids], warning }),
+    globals: { console: { error: (...args) => diagnostics.push(args.join(' ')) } },
+  });
+  view.harness.elements.find((item) => item.props.id === `replay-${key}`).props.onChange({ target: { value: payload.stream_url } });
+  await view.harness.flush();
+  const replaying = view.harness.elements.find((item) => item.props.children === 'Submit original request with same key').props.onClick();
+  for (let attempt = 0; !view.sent.length && attempt < 100; attempt++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(view.sent.length, 1);
+  view.harness.unmount();
+  failWrites();
+  pending.resolve({ item: { id: 'replay-original', status: 'complete' } });
+  await replaying;
+  assert.deepEqual(saved.at(-1).ids.sort(), ['pre-journal-old', 'replay-original']);
+  assert.ok(saved.at(-1).warning);
+  assert.ok(diagnostics.length);
+  assert.ok(diagnostics.every((message) => message === 'Cannot persist accepted detection recovery after navigation. Keep existing browser recovery storage; outcome may remain unknown.'));
+  assert.equal(api.read().batches[0].entries[0].state, 'uncertain');
+  assert.ok(![...data.values(), ...diagnostics].join('').includes(payload.stream_url));
+  assert.equal(view.sentKeys[0], key);
+});
+
+test('journal warning failure after navigation is diagnosed even when acceptance and monitor storage succeed', async () => {
+  const { api } = journalHarness();
+  const diagnostics = [];
+  const pending = deferred();
+  const saved = [];
+  const view = await dashboard({
+    ...api, warn: () => { throw new Error('private signed URL, key and token detail'); },
+  }, {
+    post: () => pending.promise,
+    saveJobMonitor: (ids, warning) => saved.push({ ids: [...ids], warning }),
+    globals: { console: { error: (...args) => diagnostics.push(args.join(' ')) } },
+  });
+  const submitting = view.submit();
+  for (let attempt = 0; !view.sent.length && attempt < 100; attempt++) await new Promise((resolve) => setTimeout(resolve, 5));
+  view.harness.unmount();
+  pending.resolve({ item: { id: 'confirmed-before-warning-failure', status: 'complete' } });
+  await submitting;
+  assert.equal(api.read().batches[0].entries[0].jobId, 'confirmed-before-warning-failure');
+  assert.deepEqual(saved.at(-1).ids, ['confirmed-before-warning-failure']);
+  assert.ok(saved.at(-1).warning);
+  assert.ok(diagnostics.length);
+  assert.ok(diagnostics.every((message) => message === 'Cannot persist accepted detection recovery after navigation. Keep existing browser recovery storage; outcome may remain unknown.'));
+  assert.equal(view.sent.length, 1);
+});
+
 test('acceptance during asynchronous replay validation cannot return a stale replay authorization', async () => {
   const { api } = journalHarness();
   const batch = await api.prepareBatch([payload.stream_url], options);

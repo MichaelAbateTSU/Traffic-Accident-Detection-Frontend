@@ -316,6 +316,7 @@ test('old servers fail closed after POST, and structured unknown/expiry/conflict
     [410, { code: 'idempotency_result_expired', message: 'Result expired.' }],
     [409, { code: 'idempotency_key_conflict', message: 'Original parameters differ.' }],
     [503, { code: 'idempotency_unavailable', message: 'Durable storage unavailable.' }],
+    [503, { code: 'submission_storage_unavailable', message: 'Submission storage is temporarily unavailable. Reconcile the original identity later.' }],
   ]) {
     const paths = [];
     const api = await loadApi({}, {

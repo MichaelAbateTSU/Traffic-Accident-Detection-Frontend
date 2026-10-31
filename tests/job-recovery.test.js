@@ -107,6 +107,62 @@ async function waitForSubmissions(submissions, count, harness) {
   await harness.flush();
 }
 
+for (const mode of ['success', 'late', 'journal-failure', 'late-journal-failure']) {
+  test(`new keyed acceptance retains unavailable pre-journal monitor IDs across reload (${mode})`, async () => {
+    const pending = deferred();
+    const diagnostics = [];
+    const { api, storage } = await monitorHarness({
+      saved: { ids: ['pre-journal-unavailable'] },
+      getJob: async (id) => {
+        if (id === 'pre-journal-unavailable') throw Object.assign(new Error('Missing original record'), { status: 404 });
+        return { item: { id, status: 'complete' } };
+      },
+      getJobs: async (query) => ({ items: mode === 'success' && query.status === 'running'
+        ? [{ id: 'listing-only', status: 'running' }] : [] }),
+    });
+    const dependencies = journalDependencies({ storage });
+    const original = dependencies.createSubmissionJournal();
+    const journal = {
+      ...dependencies,
+      createSubmissionJournal: () => ({
+        ...original,
+        accept: (...args) => {
+          if (mode.includes('journal-failure')) throw new Error('synthetic-private-url-token-key');
+          return original.accept(...args);
+        },
+      }),
+    };
+    const first = await dashboardHarness(api.recoverJobMonitor, api.getMonitoredJob, {
+      journal, sources: ['stream-1'],
+      startDetectionJob: () => pending.promise,
+      saveJobMonitor: api.saveJobMonitor,
+      globals: { console: { error: (...args) => diagnostics.push(args.join(' ')) } },
+    });
+    first.harness.render();
+    await first.harness.flush();
+    const submitting = first.harness.elements.find((item) => item.type === 'form').props.onSubmit({ preventDefault() {} });
+    await waitForSubmissions(first.submissions, 1, first.harness);
+    if (mode.startsWith('late')) first.harness.unmount();
+    pending.resolve({ item: { id: 'new-original', status: 'complete' } });
+    await submitting;
+    await first.harness.flush();
+    first.harness.unmount();
+    const saved = JSON.parse(storage.get('tad_monitor:https://backend.example'));
+    assert.deepEqual(saved.ids.sort(), mode === 'success'
+      ? ['listing-only', 'new-original', 'pre-journal-unavailable']
+      : ['new-original', 'pre-journal-unavailable']);
+    if (mode === 'late-journal-failure') {
+      assert.ok(diagnostics.length);
+      assert.ok(diagnostics.every((message) => message === 'Cannot persist accepted detection recovery after navigation. Keep existing browser recovery storage; outcome may remain unknown.'));
+      assert.ok(saved.warning);
+    }
+    const reloaded = await api.recoverJobMonitor({ journal: original });
+    assert.deepEqual([...reloaded.jobs.map((item) => item.id)].sort(), saved.ids);
+    assert.equal(reloaded.jobs.find((item) => item.id === 'pre-journal-unavailable').status, 'unavailable');
+    assert.equal(first.submissions.length, 1);
+  });
+}
+
 test('job errors remain visible, 404 has unknown outcome, and listing failures reject unsafe recovery', async () => {
   const { api } = await monitorHarness({
     saved: { ids: ['missing', 'offline'], warning: null },
@@ -153,7 +209,7 @@ async function dashboardHarness(recoverJobMonitor, getMonitoredJob = async (id) 
     '../../hooks/useDashboardData.js': {
       useDashboardData: () => ({ stats: null, incidents: [], cameras: [], jobs: [], reload: options.reload ?? (() => {}) }),
     },
-  });
+  }, options.globals);
   return { harness, submissions, submissionKeys, persisted };
 }
 
@@ -258,22 +314,82 @@ test('POST deadline retains its original key even when the transport ignores abo
   assert.equal(clock.timers.size, 0);
 });
 
-test('multiple historic GET deadlines run in parallel and a healthy job is reported before any held read settles', async () => {
+test('bounded historic GETs share one pass deadline while a later healthy active listing progresses immediately', async () => {
   const progress = [];
   const { api, clock } = await monitorHarness({
     saved: { ids: ['held-1', 'held-2', 'healthy'], warning: 'Historic partial acceptance' },
     getJob: async (id) => id.startsWith('held') ? new Promise(() => {}) : { item: { id, status: 'complete', framesProcessed: 120 } },
+    getJobs: async (query) => ({ items: query.status === 'running' ? [{ id: 'healthy', status: 'running', framesProcessed: 120 }] : [] }),
   });
   const recovery = api.recoverJobMonitor({ onJobs: (snapshot) => progress.push(...snapshot.jobs) });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(clock.timers.size, 2, 'held historic reads share one deadline window, not serial 30-second waits');
-  assert.ok(progress.some((job) => job.id === 'healthy' && job.status === 'complete'));
+  assert.equal(clock.timers.size, 3, 'two held reads and one whole-pass deadline, not serial windows');
+  assert.ok(progress.some((job) => job.id === 'healthy' && job.status === 'running' && !job.recoveringRead));
   clock.expire();
   const result = await recovery;
   assert.deepEqual([...result.jobs.map((job) => job.id)].sort(), ['healthy', 'held-1', 'held-2']);
   assert.ok(result.jobs.filter((job) => job.id.startsWith('held')).every((job) => job.status === 'pending' && /timed out/.test(job.monitorError)));
-  assert.equal(result.jobs.find((job) => job.id === 'healthy').status, 'complete');
+  assert.equal(result.jobs.find((job) => job.id === 'healthy').status, 'running');
   assert.equal(clock.timers.size, 0);
+});
+
+test('large history retains unstarted IDs after one deadline and explicit retry prioritizes deferred references', async () => {
+  const calls = [];
+  const ids = Array.from({ length: 20 }, (_, index) => `history-${index}`);
+  const { api, clock } = await monitorHarness({
+    saved: { ids },
+    getJob: async (id) => { calls.push(id); return id === 'history-19' ? { item: { id, status: 'complete' } } : new Promise(() => {}); },
+  });
+  const recovery = api.recoverJobMonitor();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, ids.slice(0, 2));
+  clock.expire();
+  const result = await recovery;
+  assert.equal(result.jobs.length, 20);
+  assert.equal(result.jobs.filter((item) => item.recoveryDeferred).length, 18);
+  assert.equal(calls.length, 2, 'No unstarted request gets another 30-second deadline');
+  assert.ok(result.jobs.filter((item) => item.recoveryDeferred).every((item) => item.status === 'pending' && /outcome unknown/.test(item.monitorError)));
+  assert.equal(clock.timers.size, 0);
+  const retry = api.recoverJobMonitor({ knownIds: ['history-19', ...ids.slice(2)] });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls[2], 'history-19');
+  clock.expire();
+  const retried = await retry;
+  assert.equal(retried.jobs.find((item) => item.id === 'history-19').status, 'complete');
+  assert.equal(retried.jobs.length, 20);
+  assert.equal(clock.timers.size, 0);
+});
+
+test('Dashboard does not poll the deferred history queue and its read-only retry restores those references', async () => {
+  let responsive = false;
+  const reads = [];
+  const { api, clock, storage } = await monitorHarness({
+    saved: { ids: Array.from({ length: 6 }, (_, index) => `saved-${index}`) },
+    getJob: async (id) => {
+      reads.push(id);
+      return responsive ? { item: { id, status: 'complete' } } : new Promise(() => {});
+    },
+  });
+  const { harness, submissions } = await dashboardHarness(api.recoverJobMonitor, api.getMonitoredJob, {
+    journal: journalDependencies({ storage }),
+  });
+  harness.render();
+  await harness.flush();
+  assert.equal(reads.length, 2);
+  responsive = true;
+  clock.expire();
+  await harness.flush();
+  assert.equal(reads.length, 4, 'Only the two attempted historic IDs resume polling');
+  assert.equal(harness.elements.filter((item) => item.type === 'JobStatusCard' && item.props.job.recoveryDeferred).length, 4);
+  const retry = harness.elements.find((item) => item.props.children === 'Retry deferred historical recovery (read only)');
+  assert.ok(retry);
+  retry.props.onClick();
+  await harness.flush();
+  assert.ok(harness.elements.filter((item) => item.type === 'JobStatusCard').every((item) => item.props.job.status === 'complete' && !item.props.job.recoveryDeferred));
+  assert.equal(submissions.length, 0);
+  assert.equal(harness.timers.size, 0);
+  assert.equal(clock.timers.size, 0);
+  harness.unmount();
 });
 
 test('a malformed GET job identity preserves the original reference and does not invent a completed outcome', async () => {

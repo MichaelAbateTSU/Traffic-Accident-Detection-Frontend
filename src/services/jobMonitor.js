@@ -8,6 +8,13 @@ const JOB_REFERENCE = /^[a-zA-Z0-9_-]{1,128}$/;
 
 export const JOB_READ_TIMEOUT_MS = 30000;
 
+async function mapBounded(items, action, concurrency = 2) {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (next < items.length) await action(items[next++]);
+  }));
+}
+
 function awaitRequest(request, { signal, label, timeoutMs = JOB_READ_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
     const controller = new AbortController();
@@ -66,7 +73,7 @@ async function reconcileIntents(journal, { signal, onAccepted } = {}) {
   const errors = [];
   const entries = journal.read().batches.flatMap((batch) => batch.entries)
     .filter((entry) => entry.protocol === 'keyed-v1' && ['uncertain', 'not-recorded', 'expired'].includes(entry.state));
-  await Promise.all(entries.map(async (entry) => {
+  await mapBounded(entries, async (entry) => {
     let receipt;
     let readError;
     try {
@@ -90,7 +97,7 @@ async function reconcileIntents(journal, { signal, onAccepted } = {}) {
         ? 'Versioned submission lookup is unavailable; acceptance remains unknown. No legacy fallback is allowed.'
         : `Submission lookup failed; acceptance remains unknown. ${readError.message}`);
     }
-  }));
+  });
   return errors.join(' ') || null;
 }
 
@@ -166,7 +173,7 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
   }
   const journal = journalApi.read();
   if (!Array.isArray(knownIds) || knownIds.some((id) => typeof id !== 'string' || !JOB_REFERENCE.test(id))) throw new Error('Invalid known recovery references.');
-  saved.ids = [...new Set([...saved.ids, ...knownIds, ...journal.batches.flatMap((batch) => batch.entries)
+  saved.ids = [...new Set([...knownIds, ...saved.ids, ...journal.batches.flatMap((batch) => batch.entries)
     .filter((entry) => entry.state === 'accepted').map((entry) => entry.jobId)])];
   const recovered = new Map(saved.ids.map((id) => [id, { id, status: 'pending', recoveringRead: true }]));
   const errors = new Map();
@@ -176,31 +183,39 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
   const requestSignal = controller.signal;
   const reads = new Map();
   const listings = new Map();
+  const historyController = new AbortController();
+  const cancelHistory = () => historyController.abort();
+  requestSignal.addEventListener('abort', cancelHistory, { once: true });
+  let historyExpired = false;
+  let historyTimer;
   const emit = (jobs = [...recovered.values()]) => {
     if (!requestSignal.aborted) onJobs?.({ jobs, error: [...errors.values()].join(' ') || null });
   };
-  const restore = (id) => {
+  const restore = (id, historical = false) => {
     if (reads.has(id)) return reads.get(id);
     if (!recovered.has(id)) recovered.set(id, { id, status: 'pending', recoveringRead: true });
     const read = (async () => {
       try {
-        const { item } = await getMonitoredJob(id, { signal: requestSignal });
+        const { item } = await getMonitoredJob(id, { signal: historical ? historyController.signal : requestSignal });
         requestSignal.throwIfAborted();
-        recovered.set(id, { ...item, recoveringRead: false });
+        recovered.set(id, { ...item, recoveringRead: false, recoveryDeferred: false });
       } catch (error) {
-        if (error.name === 'AbortError') throw error;
+        if (error.name === 'AbortError') {
+          if (!historical || !historyExpired || requestSignal.aborted) throw error;
+          error = new Error('Historical recovery pass timed out after 30 seconds. Original job reference is retained; outcome remains unknown.');
+        }
         const message = error.status === 404
           ? `Job ${id} is unavailable (expired or unknown); its inference outcome is unknown. ${error.message}`
           : `Cannot recover job ${id}: ${error.message}`;
         errors.set(id, message);
         const listed = listings.get(id);
         if (listed) {
-          recovered.set(id, { ...listed, recoveringRead: false });
+          recovered.set(id, { ...listed, recoveringRead: false, recoveryDeferred: false });
           errors.delete(id);
         } else {
           recovered.set(id, error.status === 404
-            ? { id, status: 'unavailable', recoveringRead: false, monitorError: message }
-            : { id, status: 'pending', recoveringRead: false, monitorError: message });
+            ? { id, status: 'unavailable', recoveringRead: false, recoveryDeferred: false, monitorError: message }
+            : { id, status: 'pending', recoveringRead: false, recoveryDeferred: false, monitorError: message });
         }
       }
       emit([recovered.get(id)]);
@@ -222,7 +237,7 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
         listings.set(item.id, item);
         const previous = recovered.get(item.id);
         if (!previous || previous.recoveringRead || errors.has(item.id)) {
-          recovered.set(item.id, { ...item, recoveringRead: previous?.recoveringRead ?? false });
+          recovered.set(item.id, { ...item, recoveringRead: false, recoveryDeferred: false });
           errors.delete(item.id);
           changed.push(recovered.get(item.id));
         }
@@ -236,16 +251,35 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
   try {
     signal?.throwIfAborted();
     emit();
-    const [, submissionError] = await Promise.all([
-      Promise.all(saved.ids.map(restore)),
-      reconcileIntents(journalApi, { signal: requestSignal, onAccepted: restore }),
+    // Admit critical work before history can occupy browser HTTP/1.1 connections.
+    const critical = Promise.all([
+      reconcileIntents(journalApi, { signal: requestSignal, onAccepted: (id) => restore(id) }),
       ...['pending', 'running'].map(listStatus),
     ]);
+    historyTimer = setTimeout(() => {
+      historyExpired = true;
+      historyController.abort();
+    }, JOB_READ_TIMEOUT_MS);
+    const history = mapBounded(saved.ids, async (id) => {
+      if (listings.has(id) || reads.has(id)) return;
+      if (historyExpired) {
+        const message = `Historical job ${id} read deferred after the recovery deadline. Reference retained; outcome unknown. Retry historical recovery explicitly.`;
+        errors.set(id, message);
+        recovered.set(id, { id, status: 'pending', recoveringRead: false, recoveryDeferred: true, monitorError: message });
+        emit([recovered.get(id)]);
+        return;
+      }
+      await restore(id, true);
+    });
+    const [[submissionError]] = await Promise.all([critical, history]);
     const updated = journalApi.read();
     saved.warning = [saved.warning, ...submissionWarnings(updated).filter((warning) => !saved.warning?.includes(warning))].filter(Boolean).join(' ') || null;
     return { jobs: [...recovered.values()], warning: saved.warning, error: [...errors.values()].join(' ') || null,
       intents: updated, submissionError };
   } finally {
+    clearTimeout(historyTimer);
+    historyController.abort();
+    requestSignal.removeEventListener('abort', cancelHistory);
     controller.abort();
     signal?.removeEventListener('abort', cancel);
   }

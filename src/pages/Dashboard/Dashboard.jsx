@@ -164,7 +164,7 @@ export default function Dashboard() {
 
     const currentJobs = monitoredJobsRef.current;
     const pendingIds = currentJobs
-      .filter((jobItem) => !jobItem.recoveringRead && needsMonitoring(jobItem.status))
+      .filter((jobItem) => !jobItem.recoveringRead && !jobItem.recoveryDeferred && needsMonitoring(jobItem.status))
       .map((jobItem) => jobItem.id)
       .filter(Boolean);
 
@@ -254,7 +254,7 @@ export default function Dashboard() {
       }
       monitoredJobsRef.current = [...merged.values()];
       setMonitoredJobs(monitoredJobsRef.current);
-      if (monitoredJobsRef.current.some((item) => !item.recoveringRead && needsMonitoring(item.status))) {
+      if (monitoredJobsRef.current.some((item) => !item.recoveringRead && !item.recoveryDeferred && needsMonitoring(item.status))) {
         if (!pollingTimerRef.current) pollingTimerRef.current = setInterval(refreshPendingJobs, JOB_POLL_INTERVAL_MS);
         refreshPendingJobs();
       } else {
@@ -301,6 +301,11 @@ export default function Dashboard() {
         console.error('Cannot persist accepted detection recovery after navigation. Keep existing browser recovery storage; outcome may remain unknown.');
       }
     }
+  }
+
+  function reportJournalFailure(error) {
+    if (monitorMountedRef.current) setMonitorStorageError(error.message);
+    else console.error('Cannot persist accepted detection recovery after navigation. Keep existing browser recovery storage; outcome may remain unknown.');
   }
 
   function trackAcceptedJob(acceptedJob) {
@@ -374,7 +379,7 @@ export default function Dashboard() {
       if (monitorMountedRef.current) {
         setJobSubmissionError(error.message);
         setStartingJob(false);
-      }
+      } else reportJournalFailure(error);
       startingJobRef.current = false;
       return;
     }
@@ -387,6 +392,7 @@ export default function Dashboard() {
     setJobSubmissionError(null);
     const queuedResponses = [];
     const previousIds = monitoredJobsRef.current.map((item) => item.id);
+    const recoveryIds = () => [...new Set([...previousIds, ...queuedResponses.map((job) => job.id)])];
     let attemptedKey;
     try {
       for (const [sourceIndex, streamUrl] of submissionSources.entries()) {
@@ -419,19 +425,22 @@ export default function Dashboard() {
         try {
           journalRef.current.accept(intent.key, id);
         } catch (error) {
-          persistMonitor(queuedResponses.map((job) => job.id), 'Confirmed acceptance could not be saved in the submission journal. Retain accepted job IDs; do not replay.');
+          reportJournalFailure(error);
+          persistMonitor(recoveryIds(), 'Confirmed acceptance could not be saved in the submission journal. Retain accepted job IDs; do not replay.');
           journalSaveError = error;
         }
         // Keep known acceptance for recovery, but do not continue a batch after navigation.
         if (!monitorMountedRef.current) {
           const remaining = submissionSources.length - queuedResponses.length;
-          persistMonitor(queuedResponses.map((job) => job.id), remaining > 0
+          persistMonitor(recoveryIds(), journalSaveError
+            ? 'Confirmed acceptance could not be saved in the submission journal. Retain accepted job IDs; do not replay.'
+            : remaining > 0
             ? `${queuedResponses.length} of ${submissionSources.length} jobs started; submission stopped after navigation: ${remaining} sources were not submitted.`
             : null);
           if (remaining > 0) journalRef.current.warn(batch.id, 'navigation');
           break;
         }
-        persistMonitor(queuedResponses.map((job) => job.id));
+        persistMonitor(recoveryIds());
         trackAcceptedJob(acceptedJob);
         if (journalSaveError) throw journalSaveError;
         setSubmissionIntents(journalRef.current.read());
@@ -446,6 +455,7 @@ export default function Dashboard() {
         ? `${queuedResponses.length} of ${submissionSources.length} jobs started; submission stopped: ${err.message}`
         : err.message;
       if (monitorMountedRef.current) setJobSubmissionError(warning);
+      else reportJournalFailure(err);
       // Do not store arbitrary backend error text: it may echo a signed source URL.
       let durableWarning = `${queuedResponses.length} of ${submissionSources.length} jobs started; submission stopped. An unconfirmed outcome must not be retried.`;
       try {
@@ -454,7 +464,7 @@ export default function Dashboard() {
         durableWarning = submissionWarnings(document).join(' ');
         if (monitorMountedRef.current) setSubmissionIntents(document);
       } catch (error) {
-        if (monitorMountedRef.current) setMonitorStorageError(error.message);
+        reportJournalFailure(error);
       }
       persistMonitor([...new Set([...previousIds, ...queuedResponses.map((job) => job.id)])], durableWarning);
     } finally {
@@ -493,6 +503,7 @@ export default function Dashboard() {
       try {
         journalRef.current.accept(key, acceptedId);
       } catch (error) {
+        reportJournalFailure(error);
         storageError = error;
       }
       const accepted = normalizeMonitorJob({ ...item, maxFrames: entry.maxFrames });
@@ -514,9 +525,10 @@ export default function Dashboard() {
         recordSubmissionExpiry(key, error);
         if (monitorMountedRef.current) setSubmissionIntents(journalRef.current.read());
       } catch (storageError) {
-        if (monitorMountedRef.current) setMonitorStorageError(storageError.message);
+        reportJournalFailure(storageError);
       }
       if (monitorMountedRef.current) setJobSubmissionError(error.message);
+      else reportJournalFailure(error);
     } finally {
       startingJobRef.current = false;
       if (began) endJobSubmission();
@@ -841,6 +853,12 @@ export default function Dashboard() {
 
         {jobSubmissionError && <AlertBanner type="warning" message="Job submission error" detail={jobSubmissionError} />}
         {jobError && <AlertBanner type="warning" message="Job monitor error" detail={jobError} />}
+        {monitoredJobs.some((item) => item.recoveryDeferred) && (
+          <button type="button" disabled={recoveringMonitor} onClick={() => {
+            monitoredJobsRef.current = [...monitoredJobsRef.current].sort((a, b) => Number(Boolean(b.recoveryDeferred)) - Number(Boolean(a.recoveryDeferred)));
+            setRecoveryKey((key) => key + 1);
+          }}>Retry deferred historical recovery (read only)</button>
+        )}
 
         {monitoredJobs.length > 0 && (
           <div className={styles.monitorSummary} role="status" aria-live="polite">
