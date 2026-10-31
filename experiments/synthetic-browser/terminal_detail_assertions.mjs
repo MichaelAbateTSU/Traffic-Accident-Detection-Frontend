@@ -101,3 +101,61 @@ export async function verifyExplicitSameKeyReplayDetails({
   assert.deepEqual(await readBackendInventory(), before);
   return { explicitReplayPosts: 1, automaticReplacementPosts: 0, duplicateInferences: 0 };
 }
+
+export async function verifyOlderDetailCannotRegressReceipt({
+  jobId, key, expected, prepareSavedUncertainIdentity, readPersistedRecovery,
+  holdOriginalActiveDetail, receiveTerminalKeyOnlyReceipt, observeMountedStatus,
+  stopMountedStatusObservation, waitForFullResultOrReadError, readMountedFullResult,
+  settleBrowserPolling, submissionRequests, readBackendInventory,
+}) {
+  const inventory = await readBackendInventory();
+  assert.deepEqual(inventory.jobIds, [jobId]);
+  const posts = submissionRequests().length;
+  await prepareSavedUncertainIdentity(jobId, key);
+  const identity = await readPersistedRecovery();
+  assert.equal(identity.jobId, jobId);
+  assert.equal(identity.key, key);
+  const releaseOlderDetail = await holdOriginalActiveDetail(jobId);
+  let observing = false;
+  try {
+    const receipt = await receiveTerminalKeyOnlyReceipt(key);
+    assert.equal(receipt.method, 'GET');
+    assert.equal(receipt.body.job_id, jobId);
+    assert.equal(receipt.body.status, 'complete');
+    assert.deepEqual(receipt.body.frames, []);
+    // Adapter installs a MutationObserver in the actual page before release.
+    // Checking only the eventual state would miss a transient visible regression.
+    await observeMountedStatus(jobId);
+    observing = true;
+  } finally {
+    try {
+      await releaseOlderDetail();
+    } catch (error) {
+      if (observing) await stopMountedStatusObservation(jobId);
+      throw error;
+    }
+  }
+  try {
+    const outcome = await waitForFullResultOrReadError(jobId, 30000);
+    await settleBrowserPolling();
+    if (outcome.kind === 'full') {
+      assertFullTerminalResult(await readMountedFullResult(jobId), expected);
+    } else {
+      assert.equal(outcome.kind, 'read-error');
+      assert.equal(outcome.visible, true);
+      assert.equal(outcome.retryable, true);
+      assert.equal(outcome.jobId, jobId);
+      assert.equal(outcome.status, 'complete');
+      assert.ok(typeof outcome.message === 'string' && outcome.message.trim().length > 0);
+    }
+    assert.equal(submissionRequests().length, posts);
+    assert.deepEqual(await readBackendInventory(), inventory);
+    return { olderDetailDidNotRegressTerminal: true, resultOutcome: outcome.kind, replacementPosts: 0 };
+  } finally {
+    if (observing) {
+      const observation = await stopMountedStatusObservation(jobId);
+      assert.equal(observation.observedTerminal, true);
+      assert.deepEqual(observation.regressions, []);
+    }
+  }
+}
