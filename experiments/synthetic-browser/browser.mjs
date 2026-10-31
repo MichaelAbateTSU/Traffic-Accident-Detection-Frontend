@@ -161,14 +161,18 @@ try {
   assert.equal(await evaluate('document.body.innerText.includes("not calibrated probabilities")'),true);
   stage='camera_job_state_presentation';
   await evaluate(`document.querySelector('a[href^="/camera/"]').click()`);
+  stage='camera_complete_label';
   await wait('document.body.innerText.includes("Job complete")',30000);
+  stage='camera_blocked_player_failure';
   await wait('document.body.innerText.includes("Raw playback error:")',30000);
   assert.equal(await evaluate('Boolean(document.querySelector("video"))'),true);
   assert.equal(await evaluate('document.body.innerText.includes("Latest saved YOLO-processed frame (not a live stream)")'),true);
   assert.ok(blockedExternalRequests>0);
   await click('Back');
+  stage='camera_return_dashboard';
   await wait('Boolean(document.querySelector("#videoSource"))',30000);
   await evaluate(`[...document.querySelectorAll('a')].find(a=>a.textContent.trim()==='Open full feed').click()`);
+  stage='live_unknown_source_summary';
   await wait('document.body.innerText.includes("9 Sources with unknown latest job state")',30000);
   assert.equal(await evaluate('document.querySelectorAll("article").length'),9);
   assert.equal(await evaluate('document.body.innerText.includes("Raw camera playback, not YOLO-processed.")'),true);
@@ -189,7 +193,7 @@ try {
     real_camera_hosts_contacted:0,unknown_configured_sources:9,
   }));
 } catch(error) {
-  console.log(JSON.stringify({phase,status:'browser_check_failed',stage,error_type:error.name,authenticated_posts:posts,js_exceptions:errors}));
+  console.log(JSON.stringify({phase,status:'browser_check_failed',stage,error_type:error.name,authenticated_posts:posts,js_exceptions:errors,raw_external_requests_blocked:blockedExternalRequests}));
   process.exitCode=1;
 } finally {
   ws?.close();
