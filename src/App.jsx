@@ -16,7 +16,10 @@ export default function App() {
   if (API_CONFIGURATION.error) {
     return (
       <main role="alert">
-        <h1>Deployment configuration error</h1>
+        <h1>{API_CONFIGURATION.baseUrl ? 'Deployment configuration error' : 'Backend not configured'}</h1>
+        {!API_CONFIGURATION.baseUrl && (
+          <p>The frontend is hosted, but the detection service is not connected. Monitoring, detection, and operator access are unavailable.</p>
+        )}
         <p>{API_CONFIGURATION.error}</p>
       </main>
     );

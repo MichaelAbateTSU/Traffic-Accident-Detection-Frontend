@@ -19,3 +19,11 @@ export function resolveApiConfiguration(env = {}) {
   }
   return { baseUrl, error: null };
 }
+
+export function validateProductionBuild(env = {}) {
+  const { error } = resolveApiConfiguration({ ...env, PROD: true });
+  const configuredUrl = (env.VITE_API_BASE_URL ?? env.VITE_API_URL ?? '').trim();
+  if (error && !(env.VITE_ALLOW_UNCONFIGURED_BACKEND === 'true' && configuredUrl === '')) {
+    throw new Error(error);
+  }
+}

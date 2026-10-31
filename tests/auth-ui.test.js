@@ -123,6 +123,8 @@ test('invalid deployment displays an error instead of an operator prompt or dash
   }, {}, { PROD: true });
   harness.render();
   assert.match(JSON.stringify(harness.elements.find((node) => node.props.role === 'alert')), /HTTPS/);
+  assert.equal(harness.elements.find((node) => node.type === 'h1').props.children, 'Backend not configured');
+  assert.match(JSON.stringify(harness.elements), /operator access are unavailable/);
   assert.equal(harness.elements.filter((node) => node.type === 'OperatorAccess').length, 0);
   harness.unmount();
 });

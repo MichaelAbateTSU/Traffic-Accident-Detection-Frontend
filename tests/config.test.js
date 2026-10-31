@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resolveApiConfiguration } from '../src/config.js';
+import { resolveApiConfiguration, validateProductionBuild } from '../src/config.js';
 
 test('development uses the existing Vite API proxy', () => {
   assert.deepEqual(resolveApiConfiguration(), { baseUrl: '/api', error: null });
@@ -23,4 +23,20 @@ test('production supports HTTPS backend prefixes and legacy configuration', () =
     baseUrl: 'https://backend.example/api/v1', error: null,
   });
   assert.equal(resolveApiConfiguration({ PROD: true, VITE_API_URL: 'https://backend.example' }).error, null);
+});
+
+test('only explicit opt-in permits a missing backend build, not invalid URLs or runtime requests', () => {
+  assert.throws(() => validateProductionBuild(), /public HTTPS/);
+  assert.throws(() => validateProductionBuild({ VITE_ALLOW_UNCONFIGURED_BACKEND: 'false' }), /public HTTPS/);
+  assert.doesNotThrow(() => validateProductionBuild({ VITE_ALLOW_UNCONFIGURED_BACKEND: 'true' }));
+  assert.doesNotThrow(() => validateProductionBuild({
+    VITE_ALLOW_UNCONFIGURED_BACKEND: 'true', VITE_API_BASE_URL: '  ',
+  }));
+  for (const baseUrl of ['/', '/api', 'http://backend.example', 'https://localhost', 'https://backend.example?token=secret']) {
+    assert.throws(() => validateProductionBuild({
+      VITE_ALLOW_UNCONFIGURED_BACKEND: 'true', VITE_API_BASE_URL: baseUrl,
+    }), /public HTTPS/);
+  }
+  assert.doesNotThrow(() => validateProductionBuild({ VITE_API_BASE_URL: 'https://backend.example/api/v1' }));
+  assert.match(resolveApiConfiguration({ PROD: true, VITE_ALLOW_UNCONFIGURED_BACKEND: 'true' }).error, /public HTTPS/);
 });
