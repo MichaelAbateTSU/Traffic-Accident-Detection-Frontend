@@ -1,18 +1,19 @@
 import { API_CONFIGURATION } from './api.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const KEYED_UUID = /^v1\.\d{10}\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const DIGEST = /^[0-9a-f]{64}$/;
 const STATES = ['prepared', 'uncertain', 'not-recorded', 'expired', 'accepted'];
 const REASONS = [null, 'submission', 'navigation'];
 
-export function validateRecoveryBackend(backend) {
+export function validateRecoveryBackend(backend, pageUrl = globalThis.location?.href ?? 'http://localhost/') {
   try {
-    const url = new URL(backend, globalThis.location?.href ?? 'http://localhost/');
+    const url = new URL(backend || '/', pageUrl);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error();
+    return url.href.replace(/\/+$/, '');
   } catch {
     throw new Error('Recovery requires an HTTP(S) backend base without credentials, query parameters or a fragment. No job was sent.');
   }
-  return backend;
 }
 
 function invalid() {
@@ -36,7 +37,7 @@ function validate(document) {
     keys.add(batch.id);
     for (const entry of batch.entries) {
       fields(entry, ['key', 'protocol', 'sourceKind', 'sourceIndex', 'maxFrames', 'saveFrames', 'fingerprint', 'state', 'jobId']);
-      if (!UUID.test(entry.key) || keys.has(entry.key) || !['legacy', 'keyed-v1'].includes(entry.protocol)
+      if (!(entry.protocol === 'legacy' ? UUID.test(entry.key) : KEYED_UUID.test(entry.key)) || keys.has(entry.key) || !['legacy', 'keyed-v1'].includes(entry.protocol)
         || !['fixed-camera', 'arbitrary'].includes(entry.sourceKind)
         || (entry.sourceKind === 'fixed-camera' ? !Number.isSafeInteger(entry.sourceIndex) || entry.sourceIndex < 0 : entry.sourceIndex !== null)
         || !Number.isInteger(entry.maxFrames) || entry.maxFrames < 1 || entry.maxFrames > 300
@@ -68,20 +69,33 @@ export function createSubmissionJournal({
   storage = () => globalThis.localStorage,
   cryptography = () => globalThis.crypto,
   backend = API_CONFIGURATION.baseUrl,
+  pageUrl = globalThis.location?.href ?? 'http://localhost/',
 } = {}) {
-  const storageKey = () => `tad_submissions:v1:${validateRecoveryBackend(backend)}`;
+  const identity = () => validateRecoveryBackend(backend, pageUrl);
+  const storageKey = () => `tad_submissions:v1:${identity()}`;
   function read() {
+    const key = storageKey();
     let raw;
+    let legacy = false;
     try {
-      raw = storage().getItem(storageKey());
+      raw = storage().getItem(key);
+      if (raw === null && key !== `tad_submissions:v1:${backend}`) {
+        raw = storage().getItem(`tad_submissions:v1:${backend}`);
+        legacy = raw !== null;
+      }
     } catch {
       throw new Error('Cannot read durable submission recovery storage. No new jobs can be sent.');
     }
+    let document;
     try {
-      return validate(raw === null ? { version: 1, batches: [] } : JSON.parse(raw));
+      document = validate(raw === null ? { version: 1, batches: [] } : JSON.parse(raw));
     } catch {
       invalid();
     }
+    if (legacy && backend && !backend.startsWith('/') && !/^https?:\/\//i.test(backend) && document.batches.length) {
+      throw new Error('Legacy relative-backend recovery is ambiguous. Retain its references and use the original explicit backend location.');
+    }
+    return document;
   }
   function write(document) {
     const serialized = JSON.stringify(validate(document));
@@ -125,12 +139,13 @@ export function createSubmissionJournal({
     }
   }
   return {
+    get backendIdentity() { return identity(); },
     read,
     async prepareBatch(sources, { maxFrames, saveFrames, sourceKind, protocol }) {
       if (!sources.length) throw new Error('No submission sources supplied.');
       const id = randomKey();
       const entries = await Promise.all(sources.map(async (source, index) => ({
-        key: randomKey(), protocol, sourceKind,
+        key: protocol === 'keyed-v1' ? `v1.${Math.floor(Date.now() / 1000)}.${randomKey()}` : randomKey(), protocol, sourceKind,
         sourceIndex: sourceKind === 'fixed-camera' ? index : null,
         maxFrames, saveFrames,
         fingerprint: await fingerprint({ stream_url: source, max_frames: maxFrames, save_frames: saveFrames }),
@@ -146,6 +161,14 @@ export function createSubmissionJournal({
     markSending(key) {
       return update(key, (entry) => {
         if (entry.state !== 'prepared') throw new Error('Submission was already attempted. Automatic replay is blocked.');
+        entry.state = 'uncertain';
+      });
+    },
+    markReplaySending(key) {
+      return update(key, (entry) => {
+        if (entry.protocol !== 'keyed-v1' || !['uncertain', 'not-recorded'].includes(entry.state)) {
+          throw new Error('This submission cannot be replayed safely.');
+        }
         entry.state = 'uncertain';
       });
     },
@@ -177,16 +200,17 @@ export function createSubmissionJournal({
       return write(document);
     },
     async verifyReplay(key, payload) {
+      const original = { ...payload };
       const entry = read().batches.flatMap((batch) => batch.entries).find((item) => item.key === key);
       if (!entry || entry.protocol !== 'keyed-v1' || !['uncertain', 'not-recorded'].includes(entry.state)) {
         throw new Error('This submission cannot be replayed safely.');
       }
-      if (await fingerprint(payload) !== entry.fingerprint) throw new Error('Recovery requires the exact original source URL and options. No job was sent.');
+      if (await fingerprint(original) !== entry.fingerprint) throw new Error('Recovery requires the exact original source URL and options. No job was sent.');
       const current = read().batches.flatMap((batch) => batch.entries).find((item) => item.key === key);
       if (!current || !['uncertain', 'not-recorded'].includes(current.state) || current.fingerprint !== entry.fingerprint) {
         throw new Error('Submission recovery changed while checking the payload. No job was sent.');
       }
-      return { key, payload: { stream_url: payload.stream_url, max_frames: payload.max_frames, save_frames: payload.save_frames } };
+      return { key, payload: original };
     },
   };
 }

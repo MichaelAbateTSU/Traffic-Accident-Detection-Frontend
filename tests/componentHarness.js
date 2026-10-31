@@ -33,6 +33,7 @@ export async function componentHarness(path, dependencies = {}, globals = {}, en
   let nextTimer = 1;
   const context = createContext({
     AbortController,
+    URL,
     console,
     setInterval(callback) {
       const id = nextTimer++;
@@ -84,6 +85,15 @@ export async function componentHarness(path, dependencies = {}, globals = {}, en
     '../../services/submissionJournal.js': journalDependencies(),
     ...dependencies,
   };
+  if (exportsBySpecifier['../../services/api.js']) {
+    exportsBySpecifier['../../services/api.js'] = { API_CONFIGURATION: { error: null }, ...exportsBySpecifier['../../services/api.js'] };
+  }
+  if (exportsBySpecifier['../../services/jobMonitor.js']) {
+    exportsBySpecifier['../../services/jobMonitor.js'] = {
+      submitMonitoredDetection: (payload, key) => exportsBySpecifier['../../services/api.js'].startDetectionJob(payload, { key }),
+      ...exportsBySpecifier['../../services/jobMonitor.js'],
+    };
+  }
   const module = new SourceTextModule(code, {
     context,
     initializeImportMeta(meta) { meta.env = env; },

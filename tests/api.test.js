@@ -243,3 +243,119 @@ test('invalid single detection frame counts never reach the backend', async () =
     await assert.rejects(api.startDetectionJob({ stream_url: 'https://stream.example', max_frames }), /integer|whole number/);
   }
 });
+
+const submissionKey = 'v1.1793484000.6e147bc2-2e7c-4e78-99ec-c211c5165f9c';
+const submissionPayload = { stream_url: 'https://source.example/video.mp4?signature=dummy', max_frames: 120, save_frames: false };
+const receipt = (replayed = false) => ({
+  job_id: 'original-job', status: 'pending', replayed, idempotency_expires_at: new Date((Number(submissionKey.split('.')[1]) + 86400) * 1000).toISOString(),
+  frames: [], artifacts_base_url: 'https://backend.example/artifacts',
+});
+
+test('keyed submissions and key-only recovery use the verified endpoint and exactly one stable header, with no legacy fallback', async () => {
+  const calls = [];
+  let replayed = false;
+  const api = await loadApi({ VITE_API_BASE_URL: 'https://backend.example/api/v1' }, {
+    fetch: async (url, options) => {
+      calls.push({ url, options });
+      return { ok: true, status: options.method === 'GET' || replayed ? 200 : 202, json: async () => receipt(options.method === 'GET' || replayed) };
+    },
+  });
+  api.setOperatorToken('dummy-operator-token');
+  const accepted = await api.submitDetection(submissionPayload, { key: submissionKey });
+  assert.equal(accepted.item.id, 'original-job');
+  assert.equal(accepted.replayed, false);
+  replayed = true;
+  const replay = await api.submitDetection(submissionPayload, { key: submissionKey });
+  assert.equal(replay.item.id, accepted.item.id);
+  assert.equal(replay.replayed, true);
+  await api.getSubmission(submissionKey);
+  assert.equal(calls.length, 3);
+  for (const { url, options } of calls) {
+    assert.equal(url, 'https://backend.example/api/v1/detection-submissions/v1');
+    assert.deepEqual(Object.keys(options.headers).filter((key) => key.toLowerCase() === 'idempotency-key'), ['Idempotency-Key']);
+    assert.equal(options.headers['Idempotency-Key'], submissionKey);
+    assert.equal(options.headers.Authorization, 'Bearer dummy-operator-token');
+    assert.equal(options.credentials, 'omit');
+    assert.equal(options.redirect, 'error');
+    assert.ok(!url.includes('signature'));
+    assert.ok(!url.includes(submissionKey));
+  }
+  assert.deepEqual(JSON.parse(calls[0].options.body), submissionPayload);
+  assert.equal(calls[2].options.method, 'GET');
+  assert.equal(calls[2].options.body, undefined);
+  assert.equal(calls[2].options.cache, 'no-store');
+  await assert.rejects(api.submitDetection(submissionPayload, { key: submissionKey.split('.').at(-1) }), /stable v1/);
+  assert.equal(calls.length, 3, 'a bare UUID must fail before any POST');
+});
+
+test('legacy or malformed success-shaped receipts never establish safe acceptance', async () => {
+  for (const [status, body] of [
+    [202, { job_id: 'legacy', status: 'pending' }],
+    [202, { ...receipt(), replayed: true }],
+    [200, receipt(false)],
+    [202, { ...receipt(), idempotency_expires_at: 'not-a-date' }],
+    [202, { ...receipt(), idempotency_expires_at: '2030-11-01T21:00:00+00:00' }],
+    [202, { ...receipt(), idempotency_expires_at: '2026-11-01T21:00:00' }],
+    [202, { ...receipt(), job_id: 'https://source.example/private' }],
+    [201, receipt()],
+  ]) {
+    let requests = 0;
+    const api = await loadApi({}, {
+      fetch: async () => { requests++; return { ok: true, status, json: async () => body }; },
+    });
+    await assert.rejects(api.submitDetection(submissionPayload, { key: submissionKey }), (error) => error.code === 'invalid_submission_receipt');
+    assert.equal(requests, 1);
+  }
+});
+
+test('old servers fail closed after POST, and structured unknown/expiry/conflict codes remain distinguishable', async () => {
+  for (const [status, detail] of [
+    [404, 'Not Found'],
+    [404, { code: 'idempotency_key_unknown', message: 'No receipt found yet.' }],
+    [410, { code: 'idempotency_key_expired', message: 'Identity expired.' }],
+    [410, { code: 'idempotency_result_expired', message: 'Result expired.' }],
+    [409, { code: 'idempotency_key_conflict', message: 'Original parameters differ.' }],
+    [503, { code: 'idempotency_unavailable', message: 'Durable storage unavailable.' }],
+  ]) {
+    const paths = [];
+    const api = await loadApi({}, {
+      fetch: async (url) => { paths.push(url); return { ok: false, status, json: async () => ({ detail }) }; },
+    });
+    await assert.rejects(api.submitDetection(submissionPayload, { key: submissionKey }), (error) => {
+      assert.equal(error.status, status);
+      assert.equal(error.code, status === 404 ? 'submission_endpoint_unavailable' : detail.code);
+      assert.ok(!error.message.includes('[object Object]'));
+      return true;
+    });
+    await assert.rejects(api.getSubmission(submissionKey), (error) => {
+      assert.equal(error.status, status);
+      assert.equal(error.code, typeof detail === 'string' ? null : detail.code);
+      return true;
+    });
+    assert.ok(paths.every((path) => path.endsWith('/detection-submissions/v1')));
+    assert.equal(paths.length, 2);
+  }
+});
+
+test('queue admission failure preserves a validated original job identity without pretending inference succeeded', async () => {
+  for (const malformed of [false, true]) {
+    const api = await loadApi({}, {
+      fetch: async () => ({ ok: false, status: 503, json: async () => ({
+        detail: {
+          code: 'inference_admission_failed', message: 'The inference worker is unavailable.',
+          job_id: 'reserved-failed-job',
+          ...(malformed ? {} : { idempotency_expires_at: receipt().idempotency_expires_at }),
+        },
+      }) }),
+    });
+    if (malformed) {
+      await assert.rejects(api.submitDetection(submissionPayload, { key: submissionKey }), /valid versioned/);
+    } else {
+      const result = await api.submitDetection(submissionPayload, { key: submissionKey });
+      assert.equal(result.item.id, 'reserved-failed-job');
+      assert.equal(result.item.status, 'failed');
+      assert.equal(result.admissionFailed, true);
+      assert.equal(result.item.error, 'The inference worker is unavailable.');
+    }
+  }
+});

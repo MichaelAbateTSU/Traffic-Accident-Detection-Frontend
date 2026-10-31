@@ -74,6 +74,7 @@ async function createDashboard({ failAt = Infinity, status = 'pending', submissi
     '../../constants/cameras.js': { FIXED_CAMERA_STREAM_URLS },
     '../../services/submissionJournal.js': journalDependencies(),
     '../../services/api.js': {
+      API_CONFIGURATION: { error: null },
       parseMaxFrames,
       async startDetectionJob(payload) {
         payloads.push(payload);
@@ -83,6 +84,7 @@ async function createDashboard({ failAt = Infinity, status = 'pending', submissi
       },
     },
     '../../services/jobMonitor.js': {
+      submitMonitoredDetection: (payload, key) => dependencies['../../services/api.js'].startDetectionJob(payload, { key }),
       beginJobSubmission() {}, endJobSubmission() {},
       async getMonitoredJob(id) {
         refreshedIds.push(id);

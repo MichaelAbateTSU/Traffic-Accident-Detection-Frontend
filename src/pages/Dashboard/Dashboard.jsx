@@ -13,8 +13,8 @@ import DetectionSignalsChart from '../../components/charts/DetectionSignalsChart
 import StatusBadge from '../../components/StatusBadge/StatusBadge.jsx';
 import SectionCard from '../../components/SectionCard/SectionCard.jsx';
 import CameraPreviewCard from '../../components/CameraPreviewCard/CameraPreviewCard.jsx';
-import { parseMaxFrames, startDetectionJob } from '../../services/api.js';
-import { beginJobSubmission, endJobSubmission, getMonitoredJob, recoverJobMonitor, saveJobMonitor } from '../../services/jobMonitor.js';
+import { API_CONFIGURATION, parseMaxFrames } from '../../services/api.js';
+import { beginJobSubmission, endJobSubmission, getMonitoredJob, recoverJobMonitor, saveJobMonitor, submitMonitoredDetection } from '../../services/jobMonitor.js';
 import { createSubmissionJournal, hasUncertainSubmissions, submissionWarnings } from '../../services/submissionJournal.js';
 import { FIXED_CAMERA_STREAM_URLS } from '../../constants/cameras.js';
 import { formatDateTime, formatNumber, formatPercent } from '../../utils/formatters.js';
@@ -119,6 +119,9 @@ export default function Dashboard() {
   const [monitorStorageError, setMonitorStorageError] = useState(null);
   const [recoveryKey, setRecoveryKey] = useState(0);
   const [submissionIntents, setSubmissionIntents] = useState({ version: 1, batches: [] });
+  const [submissionRecoveryError, setSubmissionRecoveryError] = useState(null);
+  const [replayUrls, setReplayUrls] = useState({});
+  const submissionPayloadsRef = useRef(new Map());
   const journalRef = useRef(null);
   if (!journalRef.current) journalRef.current = createSubmissionJournal();
   const totalFixedCameras = FIXED_CAMERA_STREAM_URLS.length;
@@ -161,7 +164,7 @@ export default function Dashboard() {
 
     const currentJobs = monitoredJobsRef.current;
     const pendingIds = currentJobs
-      .filter((jobItem) => needsMonitoring(jobItem.status))
+      .filter((jobItem) => !jobItem.recoveringRead && needsMonitoring(jobItem.status))
       .map((jobItem) => jobItem.id)
       .filter(Boolean);
 
@@ -222,7 +225,10 @@ export default function Dashboard() {
   useEffect(() => {
     const controller = new AbortController();
     let active = true;
+    let sawProgress = false;
     stopBatchPolling();
+    monitoredJobsRef.current = monitoredJobsRef.current.map((item) => ({ ...item, recoveringRead: true }));
+    setMonitoredJobs(monitoredJobsRef.current);
     recoveringMonitorRef.current = true;
     setRecoveringMonitor(true);
     setMonitorRecoveryError(null);
@@ -233,19 +239,42 @@ export default function Dashboard() {
       setRecoveringMonitor(false);
       return () => controller.abort();
     }
-    recoverJobMonitor({ signal: controller.signal })
-      .then(({ jobs: recovered, warning, error: recoveryError }) => {
+    const mergeRecovery = (recovered) => {
+      const merged = new Map(monitoredJobsRef.current.map((item) => [item.id, item]));
+      for (const item of recovered) {
+        const previous = merged.get(item.id);
+        // Polling can finish while older recovery listings are still in flight.
+        if (previous && !previous.recoveringRead && ['complete', 'failed'].includes(previous.status) && needsMonitoring(item.status)) continue;
+        merged.set(item.id, normalizeMonitorJob({
+          ...(item.recoveringRead && previous ? { ...item, ...previous, recoveringRead: true } : { ...previous, ...item }),
+          monitorError: item.monitorError,
+          events: item.events?.length ? item.events : previous?.events ?? [],
+          frames: mergeFrameImages(previous?.frames, item.frames),
+        }));
+      }
+      monitoredJobsRef.current = [...merged.values()];
+      setMonitoredJobs(monitoredJobsRef.current);
+      if (monitoredJobsRef.current.some((item) => !item.recoveringRead && needsMonitoring(item.status))) {
+        if (!pollingTimerRef.current) pollingTimerRef.current = setInterval(refreshPendingJobs, JOB_POLL_INTERVAL_MS);
+        refreshPendingJobs();
+      } else {
+        stopBatchPolling();
+      }
+    };
+    recoverJobMonitor({ signal: controller.signal, journal: journalRef.current, knownIds: monitoredJobsRef.current.map((item) => item.id), onJobs: ({ jobs: recovered }) => {
+      if (!active) return;
+      sawProgress = true;
+      mergeRecovery(recovered);
+      setJobError(monitoredJobsRef.current.map((item) => item.monitorError).filter(Boolean).join(' ') || null);
+    } })
+      .then(({ jobs: recovered, warning, error: recoveryError, intents, submissionError }) => {
         if (!active) return;
-        monitoredJobsRef.current = recovered.map(normalizeMonitorJob);
-        setMonitoredJobs(monitoredJobsRef.current);
+        if (!sawProgress) mergeRecovery(recovered.map((item) => ({ ...item, recoveringRead: false })));
         setJobSubmissionError(warning);
-        setJobError(recoveryError);
-        persistMonitor(recovered.map((item) => item.id), warning);
-        if (recovered.some((item) => needsMonitoring(item.status))) {
-          stopBatchPolling();
-          pollingTimerRef.current = setInterval(refreshPendingJobs, JOB_POLL_INTERVAL_MS);
-          refreshPendingJobs();
-        }
+        setJobError(sawProgress ? monitoredJobsRef.current.map((item) => item.monitorError).filter(Boolean).join(' ') || null : recoveryError);
+        setSubmissionIntents(intents ?? journalRef.current.read());
+        setSubmissionRecoveryError(submissionError ?? null);
+        persistMonitor(monitoredJobsRef.current.map((item) => item.id), warning);
         recoveringMonitorRef.current = false;
         setRecoveringMonitor(false);
       })
@@ -263,12 +292,38 @@ export default function Dashboard() {
 
   function persistMonitor(ids, warning = null) {
     try {
-      saveJobMonitor(ids, warning);
+      saveJobMonitor(ids, warning, journalRef.current.backendIdentity);
       if (monitorMountedRef.current) setMonitorStorageError(null);
     } catch (error) {
       if (monitorMountedRef.current) {
-        setMonitorStorageError(`Cannot save job monitor for reload recovery: ${error.message}. Active jobs will still be recovered from the backend.`);
+        setMonitorStorageError(`Cannot save job monitor for reload recovery: ${error.message}. Retain the submission journal; accepted outcomes may require key lookup.`);
+      } else {
+        console.error('Cannot persist accepted detection recovery after navigation. Keep existing browser recovery storage; outcome may remain unknown.');
       }
+    }
+  }
+
+  function trackAcceptedJob(acceptedJob) {
+    if (!monitorMountedRef.current) return;
+    const previous = monitoredJobsRef.current.find((item) => item.id === acceptedJob.id);
+    monitoredJobsRef.current = previous
+      ? monitoredJobsRef.current.map((item) => item.id === acceptedJob.id ? {
+        ...item, ...acceptedJob,
+        monitorError: acceptedJob.monitorError,
+        frames: mergeFrameImages(item.frames, acceptedJob.frames),
+        events: acceptedJob.events?.length ? acceptedJob.events : item.events ?? [],
+      } : item)
+      : [...monitoredJobsRef.current, acceptedJob];
+    setMonitoredJobs(monitoredJobsRef.current);
+    if (monitoredJobsRef.current.some((item) => needsMonitoring(item.status))) {
+      if (!pollingTimerRef.current) pollingTimerRef.current = setInterval(refreshPendingJobs, JOB_POLL_INTERVAL_MS);
+      refreshPendingJobs();
+    }
+  }
+
+  function recordSubmissionExpiry(key, error) {
+    if (error.status === 410 && ['idempotency_key_expired', 'idempotency_result_expired'].includes(error.code)) {
+      journalRef.current.recordLookup(key, 'expired');
     }
   }
 
@@ -282,6 +337,7 @@ export default function Dashboard() {
 
   async function handleStartJob(event, sources = FIXED_CAMERA_STREAM_URLS) {
     event.preventDefault();
+    const submissionSources = [...sources];
     let frameCount;
     try {
       frameCount = parseMaxFrames(maxFrames);
@@ -302,10 +358,11 @@ export default function Dashboard() {
     startingJobRef.current = true;
     setStartingJob(true);
     try {
-      batch = await journalRef.current.prepareBatch(sources, {
+      if (API_CONFIGURATION.error) throw new Error(API_CONFIGURATION.error);
+      batch = await journalRef.current.prepareBatch(submissionSources, {
         maxFrames: frameCount, saveFrames,
         sourceKind: sources === FIXED_CAMERA_STREAM_URLS ? 'fixed-camera' : 'arbitrary',
-        protocol: 'legacy',
+        protocol: 'keyed-v1',
       });
       if (!monitorMountedRef.current) {
         journalRef.current.warn(batch.id, 'navigation');
@@ -322,31 +379,31 @@ export default function Dashboard() {
       return;
     }
     setBatchStartError(null);
-    beginJobSubmission();
+    beginJobSubmission({ keyed: true });
 
     setStartingJob(true);
     stopBatchPolling();
     setJobError(null);
     setJobSubmissionError(null);
     const queuedResponses = [];
+    const previousIds = monitoredJobsRef.current.map((item) => item.id);
+    let attemptedKey;
     try {
-      for (const [sourceIndex, streamUrl] of sources.entries()) {
+      for (const [sourceIndex, streamUrl] of submissionSources.entries()) {
         if (!monitorMountedRef.current) {
           journalRef.current.warn(batch.id, 'navigation');
           break;
         }
-        // The legacy transport has no reconciliation contract. Never replay these keys.
         const intent = batch.entries[sourceIndex];
+        const payload = { stream_url: streamUrl, save_frames: saveFrames, max_frames: frameCount };
+        submissionPayloadsRef.current.set(intent.key, payload);
+        attemptedKey = intent.key;
         setSubmissionIntents(journalRef.current.markSending(intent.key));
         if (sourceIndex === 0) {
           monitoredJobsRef.current = [];
           setMonitoredJobs([]);
         }
-        const { item } = await startDetectionJob({
-          stream_url: streamUrl,
-          save_frames: saveFrames,
-          max_frames: frameCount,
-        });
+        const { item, admissionFailed } = await submitMonitoredDetection(payload, intent.key);
         const id = item?.id ?? item?.jobId ?? item?.job_id;
         if (!id) {
           throw new Error('Job started but no job id was returned by the backend.');
@@ -367,24 +424,18 @@ export default function Dashboard() {
         }
         // Keep known acceptance for recovery, but do not continue a batch after navigation.
         if (!monitorMountedRef.current) {
-          const remaining = sources.length - queuedResponses.length;
+          const remaining = submissionSources.length - queuedResponses.length;
           persistMonitor(queuedResponses.map((job) => job.id), remaining > 0
-            ? `${queuedResponses.length} of ${sources.length} jobs started; submission stopped after navigation: ${remaining} sources were not submitted.`
+            ? `${queuedResponses.length} of ${submissionSources.length} jobs started; submission stopped after navigation: ${remaining} sources were not submitted.`
             : null);
           if (remaining > 0) journalRef.current.warn(batch.id, 'navigation');
           break;
         }
         persistMonitor(queuedResponses.map((job) => job.id));
-        monitoredJobsRef.current = [...monitoredJobsRef.current, acceptedJob];
-        setMonitoredJobs(monitoredJobsRef.current);
-        if (monitoredJobsRef.current.some((jobItem) => needsMonitoring(jobItem.status))) {
-          if (!pollingTimerRef.current) {
-            pollingTimerRef.current = setInterval(refreshPendingJobs, JOB_POLL_INTERVAL_MS);
-          }
-          refreshPendingJobs();
-        }
+        trackAcceptedJob(acceptedJob);
         if (journalSaveError) throw journalSaveError;
         setSubmissionIntents(journalRef.current.read());
+        if (admissionFailed) throw new Error('The original job was reserved but inference admission failed. Its job ID is retained; no replacement inference was started.');
       }
 
       if (!queuedResponses.length) {
@@ -392,24 +443,84 @@ export default function Dashboard() {
       }
     } catch (err) {
       const warning = queuedResponses.length
-        ? `${queuedResponses.length} of ${sources.length} jobs started; submission stopped: ${err.message}`
+        ? `${queuedResponses.length} of ${submissionSources.length} jobs started; submission stopped: ${err.message}`
         : err.message;
       if (monitorMountedRef.current) setJobSubmissionError(warning);
       // Do not store arbitrary backend error text: it may echo a signed source URL.
-      let durableWarning = `${queuedResponses.length} of ${sources.length} jobs started; submission stopped. An unconfirmed outcome must not be retried.`;
+      let durableWarning = `${queuedResponses.length} of ${submissionSources.length} jobs started; submission stopped. An unconfirmed outcome must not be retried.`;
       try {
+        if (attemptedKey) recordSubmissionExpiry(attemptedKey, err);
         const document = journalRef.current.warn(batch.id, 'submission');
         durableWarning = submissionWarnings(document).join(' ');
         if (monitorMountedRef.current) setSubmissionIntents(document);
       } catch (error) {
         if (monitorMountedRef.current) setMonitorStorageError(error.message);
       }
-      persistMonitor(queuedResponses.map((job) => job.id), durableWarning);
+      persistMonitor([...new Set([...previousIds, ...queuedResponses.map((job) => job.id)])], durableWarning);
     } finally {
       if (queuedResponses.length && monitorMountedRef.current) reload();
       if (monitorMountedRef.current) setStartingJob(false);
       startingJobRef.current = false;
       endJobSubmission();
+    }
+  }
+
+  async function handleReplay(key) {
+    if (startingJobRef.current || recoveringMonitorRef.current) return;
+    startingJobRef.current = true;
+    setStartingJob(true);
+    let acceptedId;
+    let began = false;
+    try {
+      if (API_CONFIGURATION.error) throw new Error(API_CONFIGURATION.error);
+      const document = journalRef.current.read();
+      const entry = document.batches.flatMap((batch) => batch.entries).find((item) => item.key === key);
+      if (!entry) throw new Error('Submission recovery reference is missing. No job was sent.');
+      const source = replayUrls[key]?.trim() || submissionPayloadsRef.current.get(key)?.stream_url
+        || (entry.sourceKind === 'fixed-camera' ? FIXED_CAMERA_STREAM_URLS[entry.sourceIndex] : '');
+      if (!source) throw new Error('Re-enter the exact original source URL to replay this request. No URL was saved.');
+      const { payload } = await journalRef.current.verifyReplay(key, {
+        stream_url: source, max_frames: entry.maxFrames, save_frames: entry.saveFrames,
+      });
+      if (!monitorMountedRef.current) return;
+      setSubmissionIntents(journalRef.current.markReplaySending(key));
+      submissionPayloadsRef.current.set(key, payload);
+      beginJobSubmission({ keyed: true });
+      began = true;
+      const { item, admissionFailed } = await submitMonitoredDetection(payload, key);
+      acceptedId = item.id;
+      let storageError;
+      try {
+        journalRef.current.accept(key, acceptedId);
+      } catch (error) {
+        storageError = error;
+      }
+      const accepted = normalizeMonitorJob({ ...item, maxFrames: entry.maxFrames });
+      trackAcceptedJob(accepted);
+      const ids = [...new Set([...monitoredJobsRef.current.map((job) => job.id), acceptedId])];
+      const updated = journalRef.current.read();
+      const warning = submissionWarnings(updated).join(' ') || null;
+      persistMonitor(ids, warning);
+      if (storageError) throw storageError;
+      if (monitorMountedRef.current) {
+        setSubmissionIntents(updated);
+        setJobSubmissionError(admissionFailed ? 'Original inference admission failed; its accepted job ID is retained.' : warning);
+        setSubmissionRecoveryError(null);
+        reload();
+      }
+    } catch (error) {
+      if (acceptedId) persistMonitor([...new Set([...monitoredJobsRef.current.map((job) => job.id), acceptedId])], 'Confirmed acceptance retained; do not replay.');
+      try {
+        recordSubmissionExpiry(key, error);
+        if (monitorMountedRef.current) setSubmissionIntents(journalRef.current.read());
+      } catch (storageError) {
+        if (monitorMountedRef.current) setMonitorStorageError(storageError.message);
+      }
+      if (monitorMountedRef.current) setJobSubmissionError(error.message);
+    } finally {
+      startingJobRef.current = false;
+      if (began) endJobSubmission();
+      if (monitorMountedRef.current) setStartingJob(false);
     }
   }
 
@@ -682,12 +793,33 @@ export default function Dashboard() {
         {uncertainSubmissions && (
           <div role="alert">
             <p>A submission may already have been accepted. New submissions are blocked; reload does not start inference or make retry safe.</p>
-            <p>Legacy submissions cannot be looked up or replayed by request key. Keyed recovery is not connected until the backend contract is verified.</p>
+            <p>Reconcile uses a read-only key lookup. Explicit same-key replay may admit the original job if it was not previously accepted; it requires the exact original URL and saved frame options, not the current form settings.</p>
+            <p>Requires one API owner, the same intact durable backend store, and one active operator tab. Replaced stores or switched deployments are not covered.</p>
+            <button type="button" disabled={recoveringMonitor}
+              onClick={() => {
+                recoveringMonitorRef.current = true;
+                setRecoveringMonitor(true);
+                setRecoveryKey((key) => key + 1);
+              }}>Reconcile submissions (read only)</button>
             {submissionIntents.batches.flatMap((batch) => batch.entries).filter((entry) => ['uncertain', 'not-recorded', 'expired'].includes(entry.state)).map((entry) => (
-              <p key={entry.key}>Request {entry.key}: {entry.state === 'expired' ? 'identity expired; outcome unknown' : entry.state === 'not-recorded' ? 'no receipt found yet; the original request may still arrive' : 'acceptance uncertain'}.</p>
+              <div key={entry.key}>
+                <p>Request {entry.key}: {entry.state === 'expired' ? 'identity expired; outcome unknown' : entry.state === 'not-recorded' ? 'no receipt found yet; the original request may still arrive' : 'acceptance uncertain'}.</p>
+                {entry.protocol === 'legacy'
+                  ? <p>This legacy intent was never sent with a backend request key. It cannot safely be looked up or replayed.</p>
+                  : entry.state !== 'expired' && (
+                    <>
+                      <label htmlFor={`replay-${entry.key}`}>Exact original source URL (needed if unavailable in memory or fixed camera configuration)</label>
+                      <input id={`replay-${entry.key}`} type="url" value={replayUrls[entry.key] ?? ''}
+                        onChange={(event) => setReplayUrls((urls) => ({ ...urls, [entry.key]: event.target.value }))} />
+                      <button type="button" disabled={startingJob || recoveringMonitor}
+                        onClick={() => handleReplay(entry.key)}>Submit original request with same key</button>
+                    </>
+                  )}
+              </div>
             ))}
           </div>
         )}
+        {submissionRecoveryError && <p role="alert">{submissionRecoveryError}</p>}
         {unavailableJobsCount > 0 && (
           <div role="alert">
             <p>{unavailableJobsCount} jobs unavailable; inference outcomes are unknown, not failed. Missing records may have expired or never existed.</p>

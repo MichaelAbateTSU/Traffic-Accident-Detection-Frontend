@@ -143,7 +143,7 @@ test('recovery rejects credential-bearing backend bases in development and keeps
   const { data, options: dependencies } = journalHarness();
   for (const backend of ['https://user:dummy@backend.example/api', 'https://backend.example/api?signed=dummy', '/api?token=dummy', '/api#credential']) {
     const api = createSubmissionJournal({ ...dependencies, backend });
-    await assert.rejects(api.prepareBatch([payload.stream_url], options), /Cannot read/);
+    await assert.rejects(api.prepareBatch([payload.stream_url], options), /Recovery requires/);
     assert.equal(data.size, 0);
   }
   for (const backend of ['/api/one', '/api/two', 'https://backend.example/one', 'https://backend.example/two']) {
@@ -154,24 +154,63 @@ test('recovery rejects credential-bearing backend bases in development and keeps
   assert.equal(data.size, 4);
 });
 
-async function dashboard(journal, { post = async () => ({ item: { id: 'accepted', status: 'pending' } }), recovered = [] } = {}) {
+test('relative backend identities bind to the effective complete path and remain fixed for late acceptance', async () => {
+  const { options: dependencies, data } = journalHarness();
+  const first = createSubmissionJournal({ ...dependencies, backend: 'api/v1', pageUrl: 'https://frontend.example/one/dashboard' });
+  const second = createSubmissionJournal({ ...dependencies, backend: 'api/v1', pageUrl: 'https://frontend.example/two/dashboard' });
+  assert.equal(first.backendIdentity, 'https://frontend.example/one/api/v1');
+  assert.equal(second.backendIdentity, 'https://frontend.example/two/api/v1');
+  const batch = await first.prepareBatch([payload.stream_url], options);
+  first.markSending(batch.entries[0].key);
+  assert.equal(second.read().batches.length, 0);
+  first.accept(batch.entries[0].key, 'late-first-backend');
+  assert.equal(first.read().batches[0].entries[0].jobId, 'late-first-backend');
+  assert.equal(second.read().batches.length, 0);
+  assert.ok(data.has('tad_submissions:v1:https://frontend.example/one/api/v1'));
+});
+
+test('root-relative legacy UUID records migrate atomically without retroactive keying or deleting their reference', async () => {
+  const { api, data, options: dependencies } = journalHarness();
+  const legacy = await api.prepareBatch([payload.stream_url], { ...options, protocol: 'legacy' });
+  api.markSending(legacy.entries[0].key);
+  api.accept(legacy.entries[0].key, 'legacy-original');
+  const document = api.read();
+  data.clear();
+  data.set('tad_submissions:v1:/api', JSON.stringify(document));
+  const current = createSubmissionJournal({ ...dependencies, backend: '/api', pageUrl: 'https://frontend.example/dashboard' });
+  assert.equal(current.read().batches[0].entries[0].key, legacy.entries[0].key);
+  const fresh = await current.prepareBatch([payload.stream_url], options);
+  const migrated = current.read();
+  assert.equal(migrated.batches[0].entries[0].protocol, 'legacy');
+  assert.equal(migrated.batches[0].entries[0].jobId, 'legacy-original');
+  assert.equal(migrated.batches[1].entries[0].key, fresh.entries[0].key);
+  assert.ok(data.has('tad_submissions:v1:/api'));
+  assert.ok(data.has('tad_submissions:v1:https://frontend.example/api'));
+});
+
+async function dashboard(journal, { post = async () => ({ item: { id: 'accepted', status: 'pending' } }), recovered = [], configurationError = null, saveJobMonitor = () => {}, globals = {} } = {}) {
   const sent = [];
+  const sentKeys = [];
   const harness = await componentHarness('../src/pages/Dashboard/Dashboard.jsx', {
     '../../services/submissionJournal.js': { ...journalDependencies(), createSubmissionJournal: () => journal },
     'react-router-dom': { Link: 'Link' },
     '../../constants/cameras.js': { FIXED_CAMERA_STREAM_URLS: ['first', 'second', 'third'] },
-    '../../services/api.js': { parseMaxFrames: Number, startDetectionJob: async (value) => { sent.push(value); return post(value); } },
+    '../../services/api.js': {
+      API_CONFIGURATION: { error: configurationError },
+      parseMaxFrames: Number,
+      startDetectionJob: async (value, { key } = {}) => { sent.push(value); sentKeys.push(key); return post(value, key); },
+    },
     '../../services/jobMonitor.js': {
-      beginJobSubmission() {}, endJobSubmission() {}, saveJobMonitor() {},
+      beginJobSubmission() {}, endJobSubmission() {}, saveJobMonitor,
       recoverJobMonitor: async () => ({ jobs: recovered, warning: null }),
       getMonitoredJob: async (id) => ({ item: { id, status: 'complete' } }),
     },
     '../../hooks/useDashboardData.js': { useDashboardData: () => ({ incidents: [], cameras: [], jobs: [], reload() {} }) },
     '../../utils/formatters.js': { formatDateTime: String, formatNumber: String, formatPercent: String },
-  });
+  }, globals);
   harness.render();
   await harness.flush();
-  return { harness, sent, submit: () => harness.elements.find((element) => element.type === 'form').props.onSubmit({ preventDefault() {} }) };
+  return { harness, sent, sentKeys, submit: () => harness.elements.find((element) => element.type === 'form').props.onSubmit({ preventDefault() {} }) };
 }
 
 test('Dashboard visibly fails before POST when storage fails and preserves its existing monitor', async () => {
@@ -219,6 +258,128 @@ test('Dashboard retains confirmed job IDs if journal acceptance storage fails an
   assert.equal(sent.length, 1);
   assert.equal(harness.elements.find((element) => element.type === 'JobStatusCard').props.job.id, 'accepted');
   assert.equal(hasUncertainSubmissions(api.read()), true);
+  assert.match(JSON.stringify(harness.elements), /Cannot persist durable/);
+  harness.unmount();
+});
+
+test('unconfigured frontend rejects before creating an uncertain intent or sending any request', async () => {
+  const { api, data } = journalHarness();
+  const { harness, sent, submit } = await dashboard(api, { configurationError: 'Backend not configured.' });
+  await submit();
+  await harness.flush();
+  assert.equal(sent.length, 0);
+  assert.equal(data.size, 0);
+  assert.match(JSON.stringify(harness.elements), /Backend not configured/);
+  harness.unmount();
+});
+
+test('reloaded arbitrary sources require exact re-entry; manual replay keeps the full original key and saved options', async () => {
+  const { api, options: dependencies, data } = journalHarness();
+  const first = await dashboard(api, { post: async () => { throw new TypeError('Synthetic lost response'); } });
+  first.harness.elements.find((element) => element.props.id === 'videoSource').props.onChange({ target: { value: payload.stream_url } });
+  await first.harness.flush();
+  await first.harness.elements.filter((element) => element.type === 'form')[1].props.onSubmit({ preventDefault() {} });
+  await first.harness.flush();
+  assert.equal(first.sent.length, 1);
+  const key = first.sentKeys[0];
+  assert.match(key, /^v1\.\d{10}\.[0-9a-f-]{36}$/);
+  assert.equal(api.read().batches[0].entries[0].key, key);
+  first.harness.unmount();
+  const second = await dashboard(createSubmissionJournal(dependencies), { post: async () => ({ item: { id: 'original-job', status: 'complete' } }) });
+  const replay = () => second.harness.elements.find((element) => element.type === 'button' && element.props.children === 'Submit original request with same key').props.onClick();
+  await replay();
+  await second.harness.flush();
+  assert.equal(second.sent.length, 0);
+  assert.match(JSON.stringify(second.harness.elements), /Re-enter the exact original/);
+  second.harness.elements.find((element) => element.props.id === 'maxFrames').props.onChange({ target: { value: '300' } });
+  second.harness.elements.find((element) => element.type === 'input' && element.props.type === 'checkbox').props.onChange({ target: { checked: true } });
+  second.harness.elements.find((element) => element.props.id === `replay-${key}`).props.onChange({ target: { value: 'https://different.example/source.mp4' } });
+  await second.harness.flush();
+  await replay();
+  await second.harness.flush();
+  assert.equal(second.sent.length, 0);
+  assert.match(JSON.stringify(second.harness.elements), /exact original source URL and options/);
+  second.harness.elements.find((element) => element.props.id === `replay-${key}`).props.onChange({ target: { value: payload.stream_url } });
+  await second.harness.flush();
+  await Promise.all([replay(), replay()]);
+  await second.harness.flush();
+  assert.equal(second.sent.length, 1, 'simultaneous replay actions must not issue multiple POSTs');
+  assert.deepEqual({ ...second.sent[0] }, payload);
+  assert.equal(second.sentKeys[0], key);
+  assert.equal(api.read().batches[0].entries[0].jobId, 'original-job');
+  assert.equal(second.harness.elements.filter((element) => element.type === 'JobStatusCard').length, 1);
+  assert.ok(![...data.values()].join('').includes('signature'));
+  second.harness.unmount();
+});
+
+test('late acceptance plus both persistence failures emits a non-secret diagnostic and retains the original recovery key', async () => {
+  const { api, failWrites, data } = journalHarness();
+  const pending = deferred();
+  const diagnostics = [];
+  let failingMonitor = false;
+  const first = await dashboard(api, {
+    post: () => pending.promise,
+    saveJobMonitor: () => { if (failingMonitor) throw new Error('Synthetic private storage detail'); },
+    globals: { console: { error: (...args) => diagnostics.push(args.join(' ')) } },
+  });
+  const submitting = first.submit();
+  for (let attempt = 0; !first.sent.length && attempt < 100; attempt++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(first.sent.length, 1);
+  const key = first.sentKeys[0];
+  first.harness.unmount();
+  failWrites();
+  failingMonitor = true;
+  pending.resolve({ item: { id: 'late-original', status: 'complete' } });
+  await submitting;
+  assert.ok(diagnostics.length > 0);
+  assert.ok(diagnostics.every((message) => /Cannot persist accepted detection recovery after navigation/.test(message)));
+  assert.ok(diagnostics.every((message) => !message.includes(key) && !message.includes('private storage detail') && !message.includes('Bearer')));
+  assert.equal(api.read().batches[0].entries[0].key, key);
+  assert.equal(api.read().batches[0].entries[0].state, 'uncertain');
+  assert.ok(![...data.values()].join('').includes('signature'));
+});
+
+test('acceptance during asynchronous replay validation cannot return a stale replay authorization', async () => {
+  const { api } = journalHarness();
+  const batch = await api.prepareBatch([payload.stream_url], options);
+  const key = batch.entries[0].key;
+  api.markSending(key);
+  const checking = api.verifyReplay(key, payload);
+  api.accept(key, 'accepted-while-checking');
+  await assert.rejects(checking, /changed while checking/);
+});
+
+test('mutation during asynchronous payload verification cannot change the authorized original replay body', async () => {
+  const { api } = journalHarness();
+  const batch = await api.prepareBatch([payload.stream_url], options);
+  const key = batch.entries[0].key;
+  api.markSending(key);
+  const mutable = { ...payload };
+  const checking = api.verifyReplay(key, mutable);
+  mutable.stream_url = 'https://different.example/new.mp4';
+  mutable.max_frames = 300;
+  mutable.save_frames = true;
+  const original = await checking;
+  assert.deepEqual(original.payload, payload);
+  assert.equal(original.key, key);
+});
+
+test('failure of the durable send transition leaves the existing monitor intact and never sends', async () => {
+  const { api, failWrites } = journalHarness();
+  const journal = {
+    ...api,
+    prepareBatch: async (...args) => {
+      const batch = await api.prepareBatch(...args);
+      failWrites();
+      return batch;
+    },
+  };
+  const { harness, sent, submit } = await dashboard(journal, { recovered: [{ id: 'existing-terminal', status: 'complete' }] });
+  await submit();
+  await harness.flush();
+  assert.equal(sent.length, 0);
+  assert.equal(harness.elements.find((element) => element.type === 'JobStatusCard').props.job.id, 'existing-terminal');
+  assert.equal(api.read().batches[0].entries[0].state, 'prepared');
   assert.match(JSON.stringify(harness.elements), /Cannot persist durable/);
   harness.unmount();
 });

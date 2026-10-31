@@ -245,13 +245,14 @@ function mapDetectionEventApiToUi(item = {}) {
   };
 }
 
-export async function apiFetch(path, { method = 'GET', params, body, signal } = {}) {
+export async function apiFetch(path, { method = 'GET', params, body, signal, idempotencyKey, cache } = {}) {
   if (API_CONFIGURATION.error) throw createApiError(API_CONFIGURATION.error);
   const qs = buildQuery(params);
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
   const url = `${TRIMMED_API_BASE}${normalizedPath}${qs ? `?${qs}` : ''}`;
 
   const headers = { Accept: 'application/json', ...authorizationHeaders() };
+  if (idempotencyKey !== undefined) headers['Idempotency-Key'] = idempotencyKey;
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
   }
@@ -263,6 +264,7 @@ export async function apiFetch(path, { method = 'GET', params, body, signal } = 
     signal,
     credentials: 'omit',
     redirect: 'error',
+    cache,
   });
 
   let payload = null;
@@ -290,10 +292,11 @@ export async function apiFetch(path, { method = 'GET', params, body, signal } = 
       data: payload.data,
       meta: payload.meta ?? null,
       error: payload.error ?? null,
+      status: response.status,
     };
   }
 
-  return { data: payload, meta: null, error: null };
+  return { data: payload, meta: null, error: null, status: response.status };
 }
 
 export function mapStatsApiToUi(data = {}) {
@@ -652,6 +655,65 @@ export async function startDetectionJob(payload, request = {}) {
     signal: request.signal,
   });
   return { item: mapJobApiToUi(data ?? {}), meta: mapMeta(meta) };
+}
+
+function requireSubmissionKey(key) {
+  if (typeof key !== 'string' || !/^v1\.\d{10}\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(key)) {
+    throw createApiError('A stable v1 submission identity is required. No job was sent.', { code: 'invalid_submission_key' });
+  }
+}
+
+function submissionReceipt(data, status, { key, lookup = false, admissionFailed = false } = {}) {
+  const expiry = data?.idempotency_expires_at;
+  if (!data || Array.isArray(data) || typeof data.job_id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(data.job_id)
+    || !['pending', 'running', 'complete', 'failed'].includes(data.status)
+    || typeof data.replayed !== 'boolean'
+    || (lookup ? status !== 200 || !data.replayed : ![200, 202].includes(status) || data.replayed !== (status === 200))
+    || typeof expiry !== 'string' || !/(Z|[+-]\d{2}:\d{2})$/.test(expiry)
+    || Date.parse(expiry) !== (Number(key.split('.')[1]) + 86400) * 1000) {
+    throw createApiError('Backend did not return a valid versioned submission receipt. Acceptance remains unknown; no legacy fallback is allowed.', {
+      status, code: 'invalid_submission_receipt',
+    });
+  }
+  return { item: mapJobApiToUi(data), replayed: data.replayed, expiresAt: expiry, admissionFailed };
+}
+
+export async function submitDetection(payload, { key, signal } = {}) {
+  requireSubmissionKey(key);
+  const original = { ...payload };
+  if (typeof original.stream_url !== 'string' || !original.stream_url || typeof original.save_frames !== 'boolean'
+    || Object.keys(original).some((field) => !['stream_url', 'max_frames', 'save_frames'].includes(field))) {
+    throw createApiError('Explicit source URL and Save frames option are required. No job was sent.');
+  }
+  if (typeof original.max_frames !== 'number') throw createApiError('An explicit integer frame count is required. No job was sent.');
+  parseMaxFrames(original.max_frames);
+  try {
+    const { data, status } = await apiFetch('/detection-submissions/v1', {
+      method: 'POST', body: original, idempotencyKey: key, signal,
+    });
+    return submissionReceipt(data, status, { key });
+  } catch (error) {
+    const detail = error.details?.detail;
+    if (error.status === 503 && error.code === 'inference_admission_failed') {
+      return submissionReceipt({
+        ...detail, status: 'failed', error: error.message, replayed: true,
+      }, 200, { key, admissionFailed: true });
+    }
+    if (error.status === 404) {
+      throw createApiError('The versioned submission endpoint is unavailable. Acceptance remains unknown; do not retry against the legacy endpoint.', {
+        status: error.status, code: 'submission_endpoint_unavailable', details: error.details,
+      });
+    }
+    throw error;
+  }
+}
+
+export async function getSubmission(key, { signal } = {}) {
+  requireSubmissionKey(key);
+  const { data, status } = await apiFetch('/detection-submissions/v1', {
+    idempotencyKey: key, signal, cache: 'no-store',
+  });
+  return submissionReceipt(data, status, { key, lookup: true });
 }
 
 export async function getJob(jobId, request = {}) {
