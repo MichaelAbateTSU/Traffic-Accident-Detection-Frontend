@@ -9,7 +9,7 @@ export function deferred() {
   return { promise, resolve, reject };
 }
 
-export async function componentHarness(path, dependencies = {}) {
+export async function componentHarness(path, dependencies = {}, globals = {}, env = {}) {
   const source = await readFile(new URL(path, import.meta.url), 'utf8');
   const { code } = await transformWithEsbuild(source, path, { jsx: 'automatic' });
   const slots = [];
@@ -29,6 +29,7 @@ export async function componentHarness(path, dependencies = {}) {
       return id;
     },
     clearInterval(id) { timers.delete(id); },
+    ...globals,
   });
   const equalDeps = (a, b) => a && b && a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
   const hooks = {
@@ -71,7 +72,10 @@ export async function componentHarness(path, dependencies = {}) {
     'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'Fragment' },
     ...dependencies,
   };
-  const module = new SourceTextModule(code, { context });
+  const module = new SourceTextModule(code, {
+    context,
+    initializeImportMeta(meta) { meta.env = env; },
+  });
   await module.link((specifier) => {
     const exports = exportsBySpecifier[specifier] ?? {
       default: specifier.endsWith('.css') ? {} : specifier.split('/').at(-1).replace('.jsx', ''),

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import CameraPlayer from '../../components/CameraPlayer/CameraPlayer.jsx';
 import StatusBadge from '../../components/StatusBadge/StatusBadge.jsx';
+import AuthenticatedImage from '../../components/AuthenticatedImage/AuthenticatedImage.jsx';
 import { getStreamUrlForCameraId } from '../../constants/cameras.js';
 import { getCameraLatestFrame, getCameraStatus } from '../../services/api.js';
 import { formatDateTime } from '../../utils/formatters.js';
@@ -204,9 +205,7 @@ export default function CameraView() {
             </span>
           )}
           {latestFrame?.url ? (
-            <a href={latestFrame.url} target="_blank" rel="noreferrer">
-              <img src={latestFrame.url} alt={`Latest processed frame for ${camera.name ?? camera.id}`} />
-            </a>
+            <AuthenticatedImage src={latestFrame.url} alt={`Latest processed frame for ${camera.name ?? camera.id}`} openLink />
           ) : (
             <span className={styles.latestFrameEmpty}>
               {latestFrameError

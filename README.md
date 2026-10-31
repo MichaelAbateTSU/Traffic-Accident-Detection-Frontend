@@ -26,7 +26,7 @@ npm install
 npm run dev
 
 # 3. Build for production
-npm run build
+VITE_API_BASE_URL=https://your-real-backend.example npm run build
 
 # 4. Preview the production build locally
 npm run preview
@@ -40,6 +40,34 @@ To point to a different backend URL, create a `.env.local` file in the project r
 
 ```env
 VITE_API_BASE_URL=http://your-backend-host:8000
+```
+
+Production builds require a public **HTTPS** `VITE_API_BASE_URL` (including the backend's API prefix, if any). Missing, relative, HTTP, localhost, or credential-bearing URLs fail the build. The runtime also shows a configuration error instead of a dashboard if configuration is invalid. The development default is `/api`; Vite's proxy is not available on a static production host. The Settings page displays the actual build-time API URL read-only; browser preferences do not change the connection.
+
+## Free production hosting (GitHub Pages)
+
+This public repository can use GitHub Pages for free static HTTPS hosting. The workflow in `.github/workflows/deploy-pages.yml` tests, builds, and deploys on pushes to `main` or a manual workflow dispatch. It never creates a paid resource. Pages hosts only the frontend; YOLO inference still requires a separately deployed backend. A frontend URL alone does not mean detection is available.
+
+1. In repository **Settings > Pages**, select **GitHub Actions** as the build source.
+2. In **Settings > Secrets and variables > Actions > Variables**, set `VITE_API_BASE_URL` to the real public HTTPS backend URL.
+3. Configure backend CORS to allow `https://michaelabatetsu.github.io` (origin only, no repository path), GET/POST/PATCH and `Content-Type`/`Authorization`. Expose `Content-Disposition` for CSV filenames.
+4. Push the verified configuration to `main` or run **Deploy frontend to GitHub Pages** manually, then verify its successful deployment and backend connectivity.
+
+The expected site address is `https://michaelabatetsu.github.io/Traffic-Accident-Detection-Frontend/`; it is **not a live-service claim** until the deployment succeeds and a backend is configured. Pages builds use the repository asset base and hash routes, such as `/#/incidents` under the repository path, so refreshing or directly opening nested pages does not produce a Pages 404. Other hosts default to history routing and must rewrite application routes to `index.html`.
+
+All `VITE_*` values are public, embedded in the downloaded JavaScript. Never set a backend token, password, or other secret as a Vite variable.
+
+Production prompts for an **operator token**, verifies it against `/cameras/status`, and sends it as `Authorization: Bearer ...` on API and CSV requests. The token is held only in memory, never in browser storage, query strings, or the build. Sign out or reload to clear it. Use `VITE_REQUIRE_AUTH=true` to enable this prompt with a protected local development backend.
+
+Protected frame images and thumbnails are fetched with authorization only on the configured backend origin and displayed using temporary blob URLs. External images never receive the operator token; redirects are rejected. Object URLs are revoked and in-flight image requests are aborted when the image changes or the view unmounts (including sign out). Opening a frame uses its local blob URL, not an unauthenticated backend link. Original camera source streams remain external public streams and never receive this token. API failures and invalid JSON/CSV/image responses are surfaced explicitly instead of appearing as empty successful results.
+
+To reproduce the Pages build locally:
+
+```bash
+VITE_API_BASE_URL=https://your-real-backend.example \
+VITE_BASE_PATH=/Traffic-Accident-Detection-Frontend/ \
+VITE_ROUTER_MODE=hash npm run build
+VITE_BASE_PATH=/Traffic-Accident-Detection-Frontend/ npm run preview
 ```
 
 ## Project Structure

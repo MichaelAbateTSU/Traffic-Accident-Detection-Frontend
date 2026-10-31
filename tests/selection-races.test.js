@@ -11,6 +11,7 @@ test('camera selection hides previous images immediately and ignores stale frame
   let cameraId = 'A';
   const requests = [];
   const harness = await componentHarness('../src/pages/CameraView/CameraView.jsx', {
+    '../../components/AuthenticatedImage/AuthenticatedImage.jsx': { default: 'img' },
     'react-router-dom': {
       Link: 'Link', useNavigate: () => () => {},
       useParams: () => ({ id: cameraId }), useLocation: () => ({ state: { name: `Camera ${cameraId}` } }),

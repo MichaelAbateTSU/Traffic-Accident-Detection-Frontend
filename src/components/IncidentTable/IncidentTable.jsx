@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { formatDateTime, formatPercent } from '../../utils/formatters.js';
 import StatusBadge from '../StatusBadge/StatusBadge.jsx';
+import AuthenticatedImage from '../AuthenticatedImage/AuthenticatedImage.jsx';
 import styles from './IncidentTable.module.css';
 
 const CONFIDENCE_THRESHOLD_HIGH = 0.9;
@@ -119,13 +120,13 @@ export default function IncidentTable({
                     onMouseEnter={() => setHoveredThumb(incident.id)}
                     onMouseLeave={() => setHoveredThumb(null)}
                   >
-                    <img
+                    <AuthenticatedImage
                       src={incident.thumbnailUrl}
                       alt={`Thumbnail for ${incident.id}`}
                       className={styles.thumb}
                     />
                     {hoveredThumb === incident.id && (
-                      <img
+                      <AuthenticatedImage
                         src={incident.thumbnailUrl}
                         alt={`Preview for ${incident.id}`}
                         className={styles.thumbPreview}

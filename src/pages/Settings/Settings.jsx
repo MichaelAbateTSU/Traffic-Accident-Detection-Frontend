@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import AlertBanner from '../../components/AlertBanner/AlertBanner.jsx';
+import { API_CONFIGURATION } from '../../services/api.js';
 import styles from './Settings.module.css';
 
 const DEFAULTS = {
-  apiBaseUrl:     'http://localhost:8000',
   pollInterval:   5000,
   cameraIds:      'CAM-01, CAM-02, CAM-03, CAM-04',
   alertThreshold: 0.75,
@@ -76,7 +76,7 @@ export default function Settings() {
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>API Connection</h2>
           <p className={styles.sectionDesc}>
-            Configure how the frontend connects to the backend detection service.
+            The backend connection is configured when the app is built, not by saved browser preferences.
           </p>
 
           <div className={styles.fieldGroup}>
@@ -88,12 +88,12 @@ export default function Settings() {
               name="apiBaseUrl"
               type="url"
               className={styles.input}
-              value={form.apiBaseUrl}
-              onChange={handleChange}
-              placeholder="http://localhost:8000"
+              value={API_CONFIGURATION.baseUrl}
+              readOnly
             />
             <span className={styles.hint}>
-              The root URL of your YOLO detection backend. Requests will be proxied in development.
+              Set VITE_API_BASE_URL in the hosting environment and redeploy to change this URL.
+              The default /api path is proxied only by the development server.
             </span>
           </div>
         </section>
