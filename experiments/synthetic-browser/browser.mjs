@@ -9,6 +9,7 @@ const phase = process.argv[2] || 'initial';
 let stage = 'devtools';
 let posts = 0, imageGets = 0, errors = 0;
 let ws;
+let blockedExternalRequests = 0;
 try {
   const targets = await (await fetch('http://127.0.0.1:9225/json/list')).json();
   ws = new WebSocket(targets.find(t => t.type === 'page').webSocketDebuggerUrl);
@@ -23,6 +24,14 @@ try {
       const waiter=pending.get(message.id);
       pending.delete(message.id);
       message.error ? waiter.reject(new Error('CDP failure')) : waiter.resolve(message.result);
+    } else if(message.method==='Fetch.requestPaused') {
+      const url=message.params.request.url;
+      const permitted=url.startsWith(api+'/') || url.startsWith(frontend+'/');
+      if(!permitted) blockedExternalRequests++;
+      send(permitted?'Fetch.continueRequest':'Fetch.failRequest', {
+        requestId:message.params.requestId,
+        ...(permitted?{}:{errorReason:'BlockedByClient'}),
+      }).catch(()=>{ errors++; });
     } else if(message.method==='Runtime.exceptionThrown') {
       errors++;
     } else if(message.method==='Network.requestWillBeSent') {
@@ -85,6 +94,7 @@ try {
   await send('Network.enable');
   await send('Network.setCacheDisabled',{cacheDisabled:true});
   await send('Page.enable');
+  await send('Fetch.enable',{patterns:[{urlPattern:'http*',requestStage:'Request'}]});
   await send('Page.navigate',{url:frontend});
   stage='authentication';
   if(phase==='initial') {
@@ -149,6 +159,20 @@ try {
   assert.ok(verifiedImage.width>0);
   assert.equal(await evaluate(`JSON.stringify({local:{...localStorage},session:{...sessionStorage}}).includes(${JSON.stringify(token)})`),false);
   assert.equal(await evaluate('document.body.innerText.includes("not calibrated probabilities")'),true);
+  stage='camera_job_state_presentation';
+  await evaluate(`document.querySelector('a[href^="/camera/"]').click()`);
+  await wait('document.body.innerText.includes("Job complete")',30000);
+  await wait('document.body.innerText.includes("Raw playback error:")',30000);
+  assert.equal(await evaluate('Boolean(document.querySelector("video"))'),true);
+  assert.equal(await evaluate('document.body.innerText.includes("Latest saved YOLO-processed frame (not a live stream)")'),true);
+  assert.ok(blockedExternalRequests>0);
+  await click('Back');
+  await wait('Boolean(document.querySelector("#videoSource"))',30000);
+  await evaluate(`[...document.querySelectorAll('a')].find(a=>a.textContent.trim()==='Open full feed').click()`);
+  await wait('document.body.innerText.includes("9 Sources with unknown latest job state")',30000);
+  assert.equal(await evaluate('document.querySelectorAll("article").length'),9);
+  assert.equal(await evaluate('document.body.innerText.includes("Raw camera playback, not YOLO-processed.")'),true);
+  assert.equal(await evaluate(`JSON.stringify({local:{...localStorage},session:{...sessionStorage}}).includes(${JSON.stringify(token)})`),false);
   assert.equal(errors,0);
   if(phase==='recovery') {
     await click('Sign out');
@@ -161,6 +185,8 @@ try {
     image_auth_checks_passed:true,last_image:verifiedImage,
     token_persisted:false,js_exceptions:errors,
     result_identical_after_restart:phase==='recovery',ui_terminal_rendered:true,
+    camera_complete_job_player_attempted:true,raw_external_requests_blocked:blockedExternalRequests,
+    real_camera_hosts_contacted:0,unknown_configured_sources:9,
   }));
 } catch(error) {
   console.log(JSON.stringify({phase,status:'browser_check_failed',stage,error_type:error.name,authenticated_posts:posts,js_exceptions:errors}));

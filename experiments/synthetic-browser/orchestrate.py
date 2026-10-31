@@ -12,8 +12,8 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parent
 SOURCE = "https://media.githubusercontent.com/media/accidentbench/accidentbench.github.io/main/assets/videos/synthetic/Town03_head-on_clear_30.mp4"
-BACKEND = "b76b56a4444d4c35081e1cee5413341a019a59b7"
-FRONTEND = "4c3e2257d7d27265322fdd2319ec79c906b54584"
+BACKEND = "cb1b0bef2fb7b8b59ec4c2a1a2d4626a8a5cce87"
+FRONTEND = "98d6eeaa3934650d9941b957cc4d7fb1b1e3044f"
 CADDY = "caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
 environment = os.environ.copy()
 environment["API_TOKEN"] = secrets.token_urlsafe(48)
