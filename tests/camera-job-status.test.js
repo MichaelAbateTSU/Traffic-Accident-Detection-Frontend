@@ -110,6 +110,8 @@ test('slow metadata requests survive multiple polling intervals without hiding s
         await harness.flush();
         assert.equal(cards()[0].props.camera.status, 'offline');
         assert.match(JSON.stringify(harness.elements), /Sources with latest job complete/);
+        assert.equal(harness.elements.filter(n => n.props['data-status'] === 'complete').length, 1);
+        assert.equal(harness.elements.filter(n => n.props['data-status'] === 'offline').length, 0);
         await tick();
         assert.equal(requests.length, 2);
         await tick();

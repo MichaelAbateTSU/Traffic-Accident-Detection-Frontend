@@ -86,7 +86,7 @@
 }
 .dot[data-status="online"]  { background: var(--color-status-online);  }
 .dot[data-status="warning"] { background: var(--color-status-warning); }
-.dot[data-status="offline"] { background: var(--color-status-offline); }
+.dot[data-status="complete"] { background: var(--color-text-secondary); }
 
 /* Grid */
 .grid {

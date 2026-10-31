@@ -112,7 +112,7 @@ export default function LiveFeed() {
           )}
           {offlineCount > 0 && (
             <span className={styles.summaryItem}>
-              <span className={styles.dot} data-status="offline" />
+              <span className={styles.dot} data-status="complete" />
               {offlineCount} Sources with latest job complete
             </span>
           )}

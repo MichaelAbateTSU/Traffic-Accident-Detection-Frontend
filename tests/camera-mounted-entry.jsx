@@ -5,6 +5,7 @@ import CameraCard from '../src/components/CameraCard/CameraCard.jsx';
 import CameraView from '../src/pages/CameraView/CameraView.jsx';
 import CameraPlayer from '../src/components/CameraPlayer/CameraPlayer.jsx';
 import CameraPreviewCard from '../src/components/CameraPreviewCard/CameraPreviewCard.jsx';
+import LiveFeed from '../src/pages/LiveFeed/LiveFeed.jsx';
 import StatusBadge from '../src/components/StatusBadge/StatusBadge.jsx';
 
 const pause = () => new Promise(resolve => setTimeout(resolve, 30));
@@ -97,6 +98,14 @@ try {
   }
   await render(<StatusBadge status="offline" />);
   check(/offline/.test(container.firstElementChild.className), 'shared offline meaning changed');
+  unmount();
+  const { FIXED_CAMERA_STREAM_URLS, getCameraIdFromStreamUrl } = await import('../src/constants/cameras.js');
+  window.cameraStatus = { id: getCameraIdFromStreamUrl(FIXED_CAMERA_STREAM_URLS[0]), status: 'offline' };
+  document.documentElement.style.setProperty('--color-text-secondary', 'rgb(139, 154, 180)');
+  await render(<MemoryRouter><LiveFeed /></MemoryRouter>);
+  const completeDot = container.querySelector('[data-status="complete"]');
+  check(completeDot && getComputedStyle(completeDot).backgroundColor === 'rgb(139, 154, 180)', 'completed source summary dot not neutral');
+  check(!container.querySelector('[data-status="offline"]'), 'completed source summary retained red offline variant');
   unmount();
   document.body.dataset.result = 'passed';
 } catch (error) {
