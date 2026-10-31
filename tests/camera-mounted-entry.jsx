@@ -85,11 +85,11 @@ try {
   check(window.players.at(-1).destroyed, 'deactivation did not destroy player');
   check(changes.at(-1) === '', 'deactivation retained playback error');
   unmount();
-  await render(<MemoryRouter><CameraPreviewCard camera={{ id: 'no-stream', status }} /></MemoryRouter>);
-  const previewBadge = [...container.querySelectorAll('span')].find(n => n.textContent === (status === 'offline' ? 'Job complete' : 'Job state unknown'));
-  check(previewBadge && /idle/.test(previewBadge.className), 'dashboard camera badge not neutral');
-  unmount();
   for (const status of ['unknown', 'offline']) {
+    await render(<MemoryRouter><CameraPreviewCard camera={{ id: 'no-stream', status }} /></MemoryRouter>);
+    const previewBadge = [...container.querySelectorAll('span')].find(n => n.textContent === (status === 'offline' ? 'Job complete' : 'Job state unknown'));
+    check(previewBadge && /idle/.test(previewBadge.className) && !/offline/.test(previewBadge.className), `${status} dashboard camera badge not neutral`);
+    unmount();
     await render(<MemoryRouter><CameraCard camera={{ id: 'no-stream', status }} /></MemoryRouter>);
     const badge = [...container.querySelectorAll('span')].find(n => n.textContent === (status === 'offline' ? 'Job complete' : 'Job state unknown'));
     check(badge && /idle|neutral/.test(badge.className) && !/offline/.test(badge.className), `${status} camera badge not neutral`);
