@@ -21,13 +21,13 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: MichaelAbateTSU/Traffic-Accident-Detection
-          ref: cb1b0bef2fb7b8b59ec4c2a1a2d4626a8a5cce87
+          ref: 21cb418e673fc944bbe2ca41bddf6d11b04c4b63
           fetch-depth: 0
           persist-credentials: false
           path: backend
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: 98d6eeaa3934650d9941b957cc4d7fb1b1e3044f
+          ref: 3549bcf1f2cccaac95acfdcb865e9a2d87e2d9dd
           persist-credentials: false
           path: frontend
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -35,8 +35,8 @@ jobs:
           node-version: 22
       - name: Build exact applications before any live admission
         run: |
-          test "$(git -C backend rev-parse HEAD)" = cb1b0bef2fb7b8b59ec4c2a1a2d4626a8a5cce87
-          test "$(git -C frontend rev-parse HEAD)" = 98d6eeaa3934650d9941b957cc4d7fb1b1e3044f
+          test "$(git -C backend rev-parse HEAD)" = 21cb418e673fc944bbe2ca41bddf6d11b04c4b63
+          test "$(git -C frontend rev-parse HEAD)" = 3549bcf1f2cccaac95acfdcb865e9a2d87e2d9dd
           cd frontend
           npm ci --quiet
           npm test
