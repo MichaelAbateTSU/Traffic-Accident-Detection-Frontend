@@ -5,6 +5,7 @@ import MetaInfoPanel from '../../components/MetaInfoPanel/MetaInfoPanel.jsx';
 import { getCameraStatus } from '../../services/api.js';
 import { FIXED_CAMERA_STREAM_URLS, getCameraIdFromStreamUrl } from '../../constants/cameras.js';
 import { formatDateTime } from '../../utils/formatters.js';
+import { createBoundedRefresh } from '../../utils/boundedRefresh.js';
 import styles from './LiveFeed.module.css';
 
 function mapFixedCameras(statusById = new Map(), statusByStreamUrl = new Map()) {
@@ -33,17 +34,9 @@ export default function LiveFeed() {
   const [pollInterval, setPollInterval] = useState(5000);
 
   useEffect(() => {
-    let controller;
-    let mounted = true;
-    let inFlight = false;
-    async function load() {
-      if (!mounted || inFlight) return;
-      inFlight = true;
-      controller = new AbortController();
-      setLoading(true);
-      try {
-        const { items, meta: metaValue } = await getCameraStatus({ signal: controller.signal });
-        if (!mounted) return;
+    const loader = createBoundedRefresh(signal => getCameraStatus({ signal }), {
+      onLoading: setLoading,
+      onResult: ({ items, meta: metaValue }) => {
         const statusById = new Map(
           items.map((item) => [String(item.id), item]),
         );
@@ -56,21 +49,15 @@ export default function LiveFeed() {
         setMeta(metaValue);
         setLastUpdatedAt(new Date().toISOString());
         setError(null);
-      } catch (err) {
-        if (err.name === 'AbortError' || !mounted) return;
+      },
+      onError: err => {
         setCameras(mapFixedCameras());
         setError(err.message);
-      } finally {
-        inFlight = false;
-        if (mounted) setLoading(false);
-      }
-    }
-    refreshStatus.current = load;
-    load();
-    return () => {
-      mounted = false;
-      controller?.abort();
-    };
+      },
+    });
+    refreshStatus.current = loader.refresh;
+    loader.refresh();
+    return loader.stop;
   }, []);
 
   useEffect(() => {

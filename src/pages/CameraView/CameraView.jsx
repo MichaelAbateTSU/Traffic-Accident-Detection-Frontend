@@ -7,6 +7,7 @@ import { getStreamUrlForCameraId } from '../../constants/cameras.js';
 import { getCameraLatestFrame, getCameraStatus } from '../../services/api.js';
 import { formatDateTime } from '../../utils/formatters.js';
 import { cameraJobStatusLabel } from '../../utils/cameraJobStatus.js';
+import { createBoundedRefresh } from '../../utils/boundedRefresh.js';
 import styles from './CameraView.module.css';
 
 function pickCameraById(items, cameraId) {
@@ -44,43 +45,32 @@ export default function CameraView() {
   useEffect(() => {
     setFrameState({ cameraId, item: null, error: null });
     if (!cameraId) return undefined;
-    let cancelled = false;
-    const controller = new AbortController();
-
-    const loadFrame = async () => {
-      try {
-        const { item } = await getCameraLatestFrame(cameraId, { signal: controller.signal });
-        if (cancelled) return;
+    const loader = createBoundedRefresh(signal => getCameraLatestFrame(cameraId, { signal }), {
+      onResult: ({ item }) => {
         setFrameState({ cameraId, item, error: null });
-      } catch (err) {
-        if (err.name === 'AbortError' || cancelled) return;
+      },
+      onError: err => {
         setFrameState((previous) => ({ ...previous, error: err.message }));
-      }
-    };
+      },
+    });
 
-    loadFrame();
-    const interval = setInterval(loadFrame, 10000);
+    loader.refresh();
+    const interval = setInterval(loader.refresh, 10000);
     return () => {
-      cancelled = true;
-      controller.abort();
+      loader.stop();
       clearInterval(interval);
     };
   }, [cameraId]);
 
   useEffect(() => {
     if (!cameraId) return undefined;
-    let cancelled = false;
-    const controller = new AbortController();
-
-    const load = async () => {
-      try {
-        const { items } = await getCameraStatus({ signal: controller.signal });
-        if (cancelled) return;
+    const loader = createBoundedRefresh(signal => getCameraStatus({ signal }), {
+      onLoading: setLoading,
+      onResult: ({ items }) => {
         const statusItem = pickCameraById(items, cameraId);
         if (!statusItem) {
           setCamera(prev => ({ ...prev, status: 'unknown', fps: null, lastSeenAt: null }));
           setError(null);
-          setLoading(false);
           return;
         }
         setCamera((prev) => ({
@@ -93,23 +83,18 @@ export default function CameraView() {
           lastSeenAt: statusItem.lastSeenAt ?? null,
         }));
         setError(null);
-      } catch (err) {
-        if (err.name === 'AbortError') return;
-        if (!cancelled) {
-          setError(err.message);
-          setCamera(prev => ({ ...prev, status: 'unknown' }));
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
+      },
+      onError: err => {
+        setError(err.message);
+        setCamera(prev => ({ ...prev, status: 'unknown', fps: null, lastSeenAt: null }));
+      },
+    });
 
-    load();
-    const interval = setInterval(load, 10000);
+    loader.refresh();
+    const interval = setInterval(loader.refresh, 10000);
 
     return () => {
-      cancelled = true;
-      controller.abort();
+      loader.stop();
       clearInterval(interval);
     };
   }, [cameraId, fallbackStreamUrl]);

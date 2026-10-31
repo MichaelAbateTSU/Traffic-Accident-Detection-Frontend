@@ -68,7 +68,19 @@ test('raw feed lists all configured cameras as unknown without jobs and preserve
       } },
     });
 
-    test('slow metadata requests survive multiple polling intervals without hiding streams or overlapping', async () => {
+    harness.render();
+    await harness.flush();
+    const cards = harness.elements.filter(n => n.type === 'CameraCard');
+    assert.equal(cards.length, cameras.FIXED_CAMERA_STREAM_URLS.length);
+    assert.ok(cards.every(n => n.props.camera.status === 'unknown' && n.props.camera.streamUrl));
+    assert.equal(harness.elements.find(n => n.type === 'DataState').props.error, null);
+    if (failure) assert.match(JSON.stringify(harness.elements.find(n => n.props.role === 'alert')), /Status network failed/);
+    assert.match(JSON.stringify(harness.elements), /Raw camera playback, not YOLO-processed/);
+    harness.unmount();
+  }
+});
+
+test('slow metadata requests survive multiple polling intervals without hiding streams or overlapping', async () => {
       for (const lateFailure of [false, true]) {
         const requests = [];
         const harness = await componentHarness('../src/pages/LiveFeed/LiveFeed.jsx', {
@@ -120,16 +132,104 @@ test('raw feed lists all configured cameras as unknown without jobs and preserve
         assert.equal(requests.length, 3);
       }
     });
-    harness.render();
+
+test('Live Feed times out hung metadata, retries and ignores cancelled late results', async () => {
+  const requests = [];
+  const harness = await componentHarness('../src/pages/LiveFeed/LiveFeed.jsx', {
+    '../../constants/cameras.js': cameras,
+    '../../utils/formatters.js': formatters,
+    '../../services/api.js': { getCameraStatus: ({ signal }) => {
+      const request = { ...deferred(), signal };
+      requests.push(request);
+      return request.promise;
+    } },
+  });
+  harness.render();
+  const timeout = [...harness.timeouts.values()][0];
+  assert.equal(timeout.delay, 30000);
+  timeout.callback();
+  await harness.flush();
+  assert.equal(requests[0].signal.aborted, true);
+  assert.match(JSON.stringify(harness.elements), /timed out after 30 seconds/);
+  assert.equal(harness.elements.filter(n => n.type === 'CameraCard').length, cameras.FIXED_CAMERA_STREAM_URLS.length);
+  harness.elements.find(n => n.type === 'button').props.onClick();
+  assert.equal(requests.length, 2);
+  const source = cameras.FIXED_CAMERA_STREAM_URLS[0];
+  const id = cameras.getCameraIdFromStreamUrl(source);
+  requests[1].resolve({ items: [{ id, status: 'offline' }] });
+  await harness.flush();
+  requests[0].resolve({ items: [{ id, status: 'online' }] });
+  await harness.flush();
+  assert.equal(harness.elements.find(n => n.type === 'CameraCard').props.camera.status, 'offline');
+  assert.equal(harness.elements.filter(n => n.props.role === 'alert').length, 0);
+  harness.unmount();
+  assert.equal(harness.timeouts.size, 0);
+});
+
+test('Camera View serializes status/frame polls, recovers timeouts and ignores stale responses', async () => {
+  const statusRequests = [];
+  const frameRequests = [];
+  const request = (list, signal) => {
+    const attempt = { ...deferred(), signal };
+    list.push(attempt);
+    return attempt.promise;
+  };
+  const harness = await componentHarness('../src/pages/CameraView/CameraView.jsx', {
+    ...common,
+    '../../components/AuthenticatedImage/AuthenticatedImage.jsx': { default: 'img' },
+    'react-router-dom': { Link: 'Link', useNavigate: () => () => {}, useParams: () => ({ id: camera.id }), useLocation: () => ({ state: camera }) },
+    '../../constants/cameras.js': { getStreamUrlForCameraId: () => camera.streamUrl },
+    '../../services/api.js': {
+      getCameraStatus: ({ signal }) => request(statusRequests, signal),
+      getCameraLatestFrame: (id, { signal }) => request(frameRequests, signal),
+    },
+  });
+  const tick = async () => {
+    for (const callback of harness.timers.values()) callback();
     await harness.flush();
-    const cards = harness.elements.filter(n => n.type === 'CameraCard');
-    assert.equal(cards.length, cameras.FIXED_CAMERA_STREAM_URLS.length);
-    assert.ok(cards.every(n => n.props.camera.status === 'unknown' && n.props.camera.streamUrl));
-    assert.equal(harness.elements.find(n => n.type === 'DataState').props.error, null);
-    if (failure) assert.match(JSON.stringify(harness.elements.find(n => n.props.role === 'alert')), /Status network failed/);
-    assert.match(JSON.stringify(harness.elements), /Raw camera playback, not YOLO-processed/);
-    harness.unmount();
+  };
+  harness.render();
+  statusRequests[0].resolve({ items: [{ ...camera, status: 'online', fps: 12 }] });
+  frameRequests[0].resolve({ item: { url: '/retained.jpg' } });
+  await harness.flush();
+  await tick();
+  await tick();
+  await tick();
+  assert.equal(statusRequests.length, 2);
+  assert.equal(frameRequests.length, 2);
+  assert.equal(statusRequests[1].signal.aborted, false);
+  for (const { callback, delay } of [...harness.timeouts.values()]) {
+    assert.equal(delay, 30000);
+    callback();
   }
+  await harness.flush();
+  assert.equal(statusRequests[1].signal.aborted, true);
+  assert.equal(frameRequests[1].signal.aborted, true);
+  assert.equal(harness.elements.find(n => n.type === 'StatusBadge').props.label, 'Job state unknown');
+  assert.doesNotMatch(JSON.stringify(harness.elements), /Job FPS:|Job timestamp:/);
+  assert.equal(harness.elements.find(n => n.type === 'img').props.src, '/retained.jpg');
+  assert.equal(harness.elements.filter(n => n.props.role === 'alert').length, 2);
+  await tick();
+  statusRequests[2].resolve({ items: [{ ...camera, status: 'offline' }] });
+  frameRequests[2].resolve({ item: { url: '/new.jpg' } });
+  await harness.flush();
+  statusRequests[1].resolve({ items: [{ ...camera, status: 'online' }] });
+  frameRequests[1].resolve({ item: { url: '/old.jpg' } });
+  await harness.flush();
+  assert.equal(harness.elements.find(n => n.type === 'StatusBadge').props.label, 'Job complete');
+  assert.equal(harness.elements.find(n => n.type === 'img').props.src, '/new.jpg');
+  assert.equal(harness.elements.filter(n => n.props.role === 'alert').length, 0);
+  await tick();
+  const output = JSON.stringify(harness.elements);
+  harness.unmount();
+  assert.equal(statusRequests[3].signal.aborted, true);
+  assert.equal(frameRequests[3].signal.aborted, true);
+  assert.equal(harness.timers.size, 0);
+  assert.equal(harness.timeouts.size, 0);
+  statusRequests[3].reject(new Error('Late status failure'));
+  frameRequests[3].resolve({ item: { url: '/unmounted.jpg' } });
+  await harness.flush();
+  assert.equal(JSON.stringify(harness.elements), output);
 });
 
 test('native player errors and autoplay rejection are surfaced with manual video controls', async () => {

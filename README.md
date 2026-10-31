@@ -172,6 +172,8 @@ Saved-frame galleries in the Dashboard and job cards display three frames (nine 
 
 Dashboard source counts include a source with **any** retained pending/running job, even if its newer job completed, divided by all distinct retained job sources; these are not cameras proven online, and `0/0` means no retained job sources. Live Feed instead groups configured sources by their **latest** retained job state, not by total jobs. Camera timestamps are job-derived timestamps, not source heartbeats or evidence of live availability. The Camera View's authenticated latest saved YOLO-processed frame is a separate bounded-job artifact, not a continuous processed live stream. Live Feed refreshes job metadata only, not source-health probes. Configured raw streams appear immediately while metadata is pending or unavailable; periodic/manual refreshes skip an in-flight request rather than overlapping or cancelling it, and unmount cancels the request and ignores late responses.
 
+Live Feed metadata and Camera View metadata/saved-frame requests have a 30-second deadline. Slow requests may span multiple polling intervals without being restarted; a timeout aborts the request, reports an error, and allows the next periodic/manual refresh to retry. Each polling path has at most one uncancelled request, and cancelled responses cannot replace newer data. Status failures clear stale job FPS/timestamps and mark state unknown; saved-frame failures retain the last successfully loaded image with an explicit refresh error. Leaving the page cancels requests and clears timers.
+
 ## Pages
 
 | Route | Page | Description |
