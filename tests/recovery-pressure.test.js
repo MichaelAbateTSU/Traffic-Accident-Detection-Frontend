@@ -20,6 +20,7 @@ test('mounted recovery prioritizes key lookup and listings over held HTTP/1.1 hi
   const timers = new Set();
   let released = false;
   let peakHistorical = 0;
+  let peakTerminal = 0;
   let receipts = 0;
   let server;
   try {
@@ -63,7 +64,9 @@ test('mounted recovery prioritizes key lookup and listings over held HTTP/1.1 hi
               res.setHeader('Content-Type', 'application/json');
               if (req.url.includes('/jobs/historic-') || req.url.includes('/jobs/accepted-')) {
                 held.add(res);
-                peakHistorical = Math.max(peakHistorical, held.size);
+                res.history = req.url.includes('/jobs/historic-');
+                peakHistorical = Math.max(peakHistorical, [...held].filter((response) => response.history).length);
+                peakTerminal = Math.max(peakTerminal, [...held].filter((response) => !response.history).length);
                 const timer = setTimeout(() => {
                   timers.delete(timer); released = true; held.delete(res);
                   res.end(JSON.stringify({ item: { id: req.url.split('/').pop(), status: 'complete' } }));
@@ -104,6 +107,7 @@ test('mounted recovery prioritizes key lookup and listings over held HTTP/1.1 hi
     assert.ok(stdout.includes('data-result="passed"'), 'Mounted pressure scenario did not finish');
     assert.ok(stdout.includes('data-critical-before-release="true"'), 'Critical recovery must finish before held history releases browser connections');
     assert.ok(peakHistorical <= 2, `Historical HTTP concurrency exceeded two: ${peakHistorical}`);
+    assert.ok(peakTerminal <= 2, `Terminal HTTP concurrency exceeded two: ${peakTerminal}`);
   } finally {
     for (const timer of timers) clearTimeout(timer);
     for (const response of held) response.destroy();

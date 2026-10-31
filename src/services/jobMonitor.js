@@ -192,7 +192,8 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
   const requestSignal = controller.signal;
   const reads = new Map();
   const listings = new Map();
-  const acceptedReads = [];
+  const terminalReads = [Promise.resolve(), Promise.resolve()];
+  let nextTerminalRead = 0;
   const historyController = new AbortController();
   const cancelHistory = () => historyController.abort();
   requestSignal.addEventListener('abort', cancelHistory, { once: true });
@@ -278,8 +279,7 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
       historyController.abort();
     }, JOB_READ_TIMEOUT_MS);
     // Receipt workers persist and emit acceptance without waiting for job reads.
-    const critical = Promise.all([
-      reconcileIntents(journalApi, {
+    const receipts = reconcileIntents(journalApi, {
         signal: historyController.signal, ownerSignal: requestSignal, expired: () => historyExpired,
         onAccepted: (item) => {
           const previous = recovered.get(item.id);
@@ -292,14 +292,27 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
             });
           }
           emit([recovered.get(item.id)]);
-          if (!active) acceptedReads.push(item.id);
+          if (!active) {
+            const lane = nextTerminalRead++ % terminalReads.length;
+            terminalReads[lane] = terminalReads[lane].then(async (failure) => {
+              if (failure) return failure;
+              try {
+                await readHistory(item.id);
+              } catch (error) {
+                return { error };
+              }
+            });
+          }
         },
-      }),
-      ...['pending', 'running'].map(listStatus),
-    ]);
+      });
     const readHistory = async (id) => {
       if (reads.has(id)) {
-        await reads.get(id);
+        const previousRead = reads.get(id);
+        await previousRead;
+        if (reads.get(id) !== previousRead) {
+          await reads.get(id);
+          return;
+        }
         const item = recovered.get(id);
         if (!item?.submissionReceiptOnly || !['complete', 'failed'].includes(item.status)) return;
         reads.delete(id);
@@ -314,9 +327,17 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
       }
       await restore(id, true);
     };
+    const critical = Promise.all([
+      receipts.then(async (submissionError) => {
+        const failures = await Promise.all(terminalReads);
+        const failure = failures.find(Boolean);
+        if (failure) throw failure.error;
+        return submissionError;
+      }),
+      ...['pending', 'running'].map(listStatus),
+    ]);
     const history = mapBounded(saved.ids, readHistory);
     const [[submissionError]] = await Promise.all([critical, history]);
-    await mapBounded(acceptedReads, readHistory);
     const updated = journalApi.read();
     saved.warning = [saved.warning, ...submissionWarnings(updated).filter((warning) => !saved.warning?.includes(warning))].filter(Boolean).join(' ') || null;
     return { jobs: [...recovered.values()], warning: saved.warning, error: [...errors.values()].join(' ') || null,

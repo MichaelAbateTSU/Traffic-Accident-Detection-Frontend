@@ -642,6 +642,79 @@ for (const receiptFirst of [false, true]) {
   });
 }
 
+for (const listingFailure of ['timeout', 'error']) {
+test(`terminal receipt details hydrate while an unrelated listing stays held (${listingFailure})`, async () => {
+  const listing = deferred();
+  let reads = 0;
+  const { api, clock, storage } = await monitorHarness({
+    getSubmission: async () => ({ item: { id: 'terminal-live', status: 'complete', submissionReceiptOnly: true, frames: [], framesProcessed: null } }),
+    getJobs: async (query) => query.status === 'running' ? listing.promise : { items: [] },
+    getJob: async (id) => {
+      reads++;
+      return { item: { id, status: 'complete', framesProcessed: 120, peakConfidence: 0.87, events: [{ id: 'event' }], frames: [{ frame_index: 1, capture: 'https://backend.example/artifacts/result.jpg' }] } };
+    },
+  });
+  const dependencies = journalDependencies({ storage });
+  const journal = dependencies.createSubmissionJournal();
+  const batch = await journal.prepareBatch(['source'], { maxFrames: 120, saveFrames: false, sourceKind: 'fixed-camera', protocol: 'keyed-v1' });
+  journal.markSending(batch.entries[0].key);
+  const { harness, submissions } = await dashboardHarness(api.recoverJobMonitor, api.getMonitoredJob, { journal: dependencies });
+  harness.render();
+  await harness.flush();
+  assert.equal(reads, 1, 'Full terminal GET must precede listing release');
+  const job = harness.elements.find((item) => item.type === 'JobStatusCard').props.job;
+  assert.equal(job.framesProcessed, 120);
+  assert.equal(job.events.length, 1);
+  assert.ok(JSON.stringify(job.frames).includes('result.jpg'));
+  if (listingFailure === 'timeout') clock.expire();
+  else listing.reject(new Error('Running listing unavailable'));
+  await harness.flush();
+  assert.match(JSON.stringify(harness.elements), listingFailure === 'timeout' ? /Active listing is incomplete/ : /Running listing unavailable/);
+  assert.equal(harness.elements.find((item) => item.type === 'JobStatusCard').props.job.framesProcessed, 120);
+  assert.ok(harness.elements.find((item) => item.type === 'button' && item.props.type === 'submit').props.disabled);
+  assert.equal(submissions.length, 0);
+  harness.unmount();
+  assert.equal(clock.timers.size, 0);
+});
+}
+
+test('multiple terminal hydration reads are bounded independently of listings and cancel without queued GETs', async () => {
+  const responses = [];
+  const signals = [];
+  let receipts = 0;
+  const { api, clock, storage } = await monitorHarness({
+    getSubmission: async () => ({ item: { id: `terminal-${++receipts}`, status: 'complete', submissionReceiptOnly: true } }),
+    getJobs: async () => new Promise(() => {}),
+    getJob: async (id, { signal }) => {
+      const response = deferred();
+      responses.push({ id, response });
+      signals.push(signal);
+      return response.promise;
+    },
+  });
+  const journal = journalDependencies({ storage }).createSubmissionJournal();
+  const batch = await journal.prepareBatch(Array.from({ length: 8 }, (_, i) => `source-${i}`), {
+    maxFrames: 120, saveFrames: false, sourceKind: 'fixed-camera', protocol: 'keyed-v1',
+  });
+  for (const entry of batch.entries) journal.markSending(entry.key);
+  const controller = new AbortController();
+  const progress = [];
+  const recovery = api.recoverJobMonitor({ journal, signal: controller.signal, onJobs: ({ jobs }) => progress.push(...jobs) });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(receipts, 8);
+  assert.equal(responses.length, 2);
+  responses[0].response.resolve({ item: { id: responses[0].id, status: 'running', framesProcessed: 1 } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(progress.some((item) => item.id === responses[0].id && item.status === 'complete' && /older active/.test(item.monitorError ?? '')));
+  assert.equal(responses.length, 3, 'Only one terminal lane becomes available');
+  controller.abort();
+  await assert.rejects(recovery, { name: 'AbortError' });
+  assert.ok(signals.slice(1).every((signal) => signal.aborted));
+  assert.equal(responses.length, 3);
+  assert.equal(clock.timers.size, 0);
+  assert.ok(journal.read().batches[0].entries.every((entry) => entry.state === 'accepted'));
+});
+
 test('Dashboard does not poll the deferred history queue and its read-only retry restores those references', async () => {
   let responsive = false;
   const reads = [];
