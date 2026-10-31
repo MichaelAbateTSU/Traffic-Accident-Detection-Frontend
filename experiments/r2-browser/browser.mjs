@@ -12,8 +12,11 @@ let job;
 let framesRendered = 0;
 let ws;
 try {
+  stage='devtools_listing';
   const targets = await (await fetch('http://127.0.0.1:9225/json/list')).json();
+  stage='devtools_page';
   const target = targets.find(t => t.type === 'page');
+  stage='devtools_websocket';
   ws = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });
   let serial = 0;

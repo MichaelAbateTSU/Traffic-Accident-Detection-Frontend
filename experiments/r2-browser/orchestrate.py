@@ -136,6 +136,7 @@ https://frontend.integration.test:8454 {
         stage = "actual_browser"
         browser = subprocess.Popen([
             "sudo", "--non-interactive", "nsenter", "--target", str(state["State"]["Pid"]), "--net",
+            "--setuid", str(os.getuid()), "--setgid", str(os.getgid()),
             "google-chrome", "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
             "--disable-gpu", "--no-proxy-server", "--ignore-certificate-errors",
             "--disable-background-networking", "--disable-breakpad", "--disable-crash-reporter",
@@ -147,12 +148,15 @@ https://frontend.integration.test:8454 {
         for attempt in range(30):
             readiness = command(
                 "sudo", "--non-interactive", "nsenter", "--target", str(state["State"]["Pid"]), "--net",
-                "curl", "--fail", "--silent", "--max-time", "1", "http://127.0.0.1:9225/json/version",
+                "curl", "--noproxy", "*", "--fail", "--silent", "--max-time", "1", "http://127.0.0.1:9225/json/version",
                 check=False, capture=True,
             )
             if readiness.returncode == 0:
                 break
             time.sleep(0.2)
+        else:
+            print(json.dumps({"chrome_startup_exit_code": browser.poll()}), flush=True)
+            raise RuntimeError("Chrome debugging endpoint unavailable")
         result = command(
             "sudo", "--non-interactive", "--preserve-env=API_TOKEN", "nsenter",
             "--target", str(state["State"]["Pid"]), "--net",
@@ -195,11 +199,11 @@ except Exception as error:
     raise SystemExit(1)
 finally:
     if browser:
-        browser.terminate()
+        command("sudo", "--non-interactive", "kill", "-TERM", str(browser.pid), check=False)
         try:
             browser.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            browser.kill()
+            command("sudo", "--non-interactive", "kill", "-KILL", str(browser.pid), check=False)
             browser.wait(timeout=5)
     docker("rm", "-f", "-v", "r2-browser-https", "r2-browser-api", "r2-browser-egress", check=False)
     docker("network", "rm", "r2-browser-private", "r2-browser-internet", check=False)
