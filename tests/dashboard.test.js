@@ -7,6 +7,12 @@ import { FIXED_CAMERA_STREAM_URLS } from '../src/constants/cameras.js';
 
 const source = await readFile(new URL('../src/pages/Dashboard/Dashboard.jsx', import.meta.url), 'utf8');
 const { code } = await transformWithEsbuild(source, 'Dashboard.jsx', { jsx: 'automatic' });
+const apiSource = await readFile(new URL('../src/services/api.js', import.meta.url), 'utf8');
+const configSource = await readFile(new URL('../src/config.js', import.meta.url), 'utf8');
+const apiModule = new SourceTextModule(apiSource, { initializeImportMeta(meta) { meta.env = {}; } });
+await apiModule.link(() => new SourceTextModule(configSource));
+await apiModule.evaluate();
+const { parseMaxFrames } = apiModule.namespace;
 
 async function createDashboard({ failAt = Infinity, status = 'pending' } = {}) {
   const slots = [];
@@ -50,6 +56,7 @@ async function createDashboard({ failAt = Infinity, status = 'pending' } = {}) {
     'react-router-dom': { Link: 'Link' },
     '../../constants/cameras.js': { FIXED_CAMERA_STREAM_URLS },
     '../../services/api.js': {
+      parseMaxFrames,
       async startDetectionJob(payload) {
         payloads.push(payload);
         if (submissions++ === failAt) throw new Error('Submission unavailable');
@@ -97,6 +104,7 @@ async function createDashboard({ failAt = Infinity, status = 'pending' } = {}) {
   }
   return {
     render, timers, payloads, refreshedIds,
+    setStatus(value) { status = value; },
     get reloads() { return reloads; },
     async submit() {
       await render().find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
@@ -123,6 +131,7 @@ for (const [label, failAt, accepted] of [
     assert.equal(dashboard.timers.size, accepted ? 1 : 0);
     assert.equal(dashboard.reloads, accepted ? 1 : 0);
     assert.ok(dashboard.payloads.every((payload) => payload.save_frames === false));
+    assert.ok(dashboard.payloads.every((payload) => payload.max_frames === 120));
 
     const warnings = () => dashboard.render().filter((node) => node.type === 'AlertBanner');
     if (failAt === Infinity) {
@@ -151,6 +160,25 @@ test('already terminal accepted jobs do not start a polling timer', async () => 
   assert.equal(dashboard.render().filter((node) => node.type === 'JobStatusCard').length, 9);
 });
 
+for (const finalStatus of ['complete', 'failed']) {
+  test(`bounded long-running jobs keep polling through running and stop on ${finalStatus}`, async () => {
+    const dashboard = await createDashboard();
+    await dashboard.submit();
+    dashboard.setStatus('running');
+    await dashboard.poll();
+    assert.equal(dashboard.timers.size, 1);
+    assert.ok(dashboard.render().filter((node) => node.type === 'JobStatusCard').every((node) => node.props.job.status === 'running'));
+    dashboard.setStatus(finalStatus);
+    await dashboard.poll();
+    assert.equal(dashboard.timers.size, 0);
+    assert.ok(dashboard.render().filter((node) => node.type === 'JobStatusCard').every((node) => node.props.job.status === finalStatus));
+    const summary = dashboard.render().find((node) => node.type === 'strong' && Array.isArray(node.props.children) && node.props.children[0] === 'All ');
+    assert.equal(summary.props.children.join(''), finalStatus === 'failed'
+      ? 'All 9 detection jobs finished: 0 complete, 9 failed.'
+      : 'All 9 detection jobs finished: 9 complete, 0 failed.');
+  });
+}
+
 test('Save frames is operator-controlled and the monitor explains its prerequisite', async () => {
   const dashboard = await createDashboard();
   const elements = dashboard.render();
@@ -161,3 +189,37 @@ test('Save frames is operator-controlled and the monitor explains its prerequisi
   await dashboard.submit();
   assert.ok(dashboard.payloads.every((payload) => payload.save_frames === true));
 });
+
+for (const frames of ['1', '120', '300']) {
+  test(`Dashboard passes ${frames} frames to every camera in the batch`, async () => {
+    const dashboard = await createDashboard();
+    const input = dashboard.render().find((node) => node.props.id === 'maxFrames');
+    assert.equal(input.props.value, '120');
+    assert.equal(input.props.min, '1');
+    assert.equal(input.props.max, '300');
+    input.props.onChange({ target: { value: frames } });
+    await dashboard.submit();
+    assert.equal(dashboard.payloads.length, FIXED_CAMERA_STREAM_URLS.length);
+    assert.ok(dashboard.payloads.every((payload) => payload.max_frames === Number(frames)));
+    assert.equal(dashboard.render().filter((node) => node.type === 'JobStatusCard').length, FIXED_CAMERA_STREAM_URLS.length);
+    await dashboard.poll();
+    assert.equal(dashboard.timers.size, 1);
+  });
+}
+
+for (const frames of ['', '0', '301', '-1', '1.5', 'NaN', 'Infinity', '1e2', ' 120 ']) {
+  test(`invalid frame count ${JSON.stringify(frames)} leaves accepted jobs and polling intact`, async () => {
+    const dashboard = await createDashboard();
+    await dashboard.submit();
+    const submitted = dashboard.payloads.length;
+    dashboard.render().find((node) => node.props.id === 'maxFrames').props.onChange({ target: { value: frames } });
+    await dashboard.submit();
+    assert.equal(dashboard.payloads.length, submitted);
+    assert.equal(dashboard.timers.size, 1);
+    assert.equal(dashboard.render().filter((node) => node.type === 'JobStatusCard').length, submitted);
+    assert.match(JSON.stringify(dashboard.render().find((node) => node.props.role === 'alert')), /whole number from 1 to 300/);
+    dashboard.render().find((node) => node.props.id === 'maxFrames').props.onChange({ target: { value: '300' } });
+    await dashboard.submit();
+    assert.ok(dashboard.payloads.slice(submitted).every((payload) => payload.max_frames === 300));
+  });
+}

@@ -180,5 +180,34 @@ test('default and legacy API environment settings remain supported', async () =>
     VITE_API_BASE_URL: 'https://preferred.example/api/v1',
     VITE_API_URL: 'https://legacy.example',
   });
+
   assert.equal(preferred.resolveAssetUrl('/artifacts/frame.jpg'), 'https://preferred.example/artifacts/frame.jpg');
+});
+
+test('single detection submissions preserve max_frames and omission compatibility', async () => {
+  const payloads = [];
+  const api = await loadApi({ VITE_API_BASE_URL: 'https://backend.example' }, {
+    async fetch(url, options) {
+      assert.equal(url, 'https://backend.example/detect-accident');
+      payloads.push(JSON.parse(options.body));
+      return { ok: true, json: async () => ({ data: { job_id: 'accepted', status: 'pending' }, meta: {} }) };
+    },
+  });
+  for (const max_frames of [1, 120, 300]) {
+    await api.startDetectionJob({ stream_url: 'https://stream.example/live', save_frames: true, max_frames });
+    assert.equal(payloads.at(-1).max_frames, max_frames);
+    assert.equal(payloads.at(-1).save_frames, true);
+  }
+  await api.startDetectionJob({ stream_url: 'https://stream.example/live', save_frames: false });
+  assert.equal('max_frames' in payloads.at(-1), false);
+  assert.equal(api.parseMaxFrames('120'), 120);
+});
+
+test('invalid single detection frame counts never reach the backend', async () => {
+  const api = await loadApi({}, {
+    fetch() { assert.fail('Invalid frame count must not make a request'); },
+  });
+  for (const max_frames of [0, 301, -1, 1.5, NaN, Infinity, true, null, '120', '']) {
+    await assert.rejects(api.startDetectionJob({ stream_url: 'https://stream.example', max_frames }), /integer|whole number/);
+  }
 });

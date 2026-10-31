@@ -13,7 +13,7 @@ import DetectionSignalsChart from '../../components/charts/DetectionSignalsChart
 import StatusBadge from '../../components/StatusBadge/StatusBadge.jsx';
 import SectionCard from '../../components/SectionCard/SectionCard.jsx';
 import CameraPreviewCard from '../../components/CameraPreviewCard/CameraPreviewCard.jsx';
-import { getJob, startDetectionJob } from '../../services/api.js';
+import { getJob, parseMaxFrames, startDetectionJob } from '../../services/api.js';
 import { FIXED_CAMERA_STREAM_URLS } from '../../constants/cameras.js';
 import { formatDateTime, formatPercent } from '../../utils/formatters.js';
 import { useDashboardData } from '../../hooks/useDashboardData.js';
@@ -98,6 +98,8 @@ function getDetectionStatusBadge(status) {
 
 export default function Dashboard() {
   const [saveFrames, setSaveFrames] = useState(false);
+  const [maxFrames, setMaxFrames] = useState('120');
+  const [frameCountError, setFrameCountError] = useState(null);
   const [startingJob, setStartingJob] = useState(false);
   const [monitoredJobs, setMonitoredJobs] = useState([]);
   const [jobError, setJobError] = useState(null);
@@ -203,6 +205,14 @@ export default function Dashboard() {
 
   async function handleStartJob(event) {
     event.preventDefault();
+    let frameCount;
+    try {
+      frameCount = parseMaxFrames(maxFrames);
+    } catch (err) {
+      setFrameCountError(err.message);
+      return;
+    }
+    setFrameCountError(null);
 
     setStartingJob(true);
     stopBatchPolling();
@@ -217,6 +227,7 @@ export default function Dashboard() {
         const { item } = await startDetectionJob({
           stream_url: streamUrl,
           save_frames: saveFrames,
+          max_frames: frameCount,
         });
         const id = item?.id ?? item?.jobId ?? item?.job_id;
         if (!id) {
@@ -226,6 +237,7 @@ export default function Dashboard() {
           normalizeMonitorJob({
             ...item,
             id,
+            maxFrames: item.maxFrames ?? frameCount,
             frames: mergeFrameImages([], item?.frames ?? []),
           }),
         );
@@ -423,10 +435,30 @@ export default function Dashboard() {
         description={`One detection job is queued for each of ${totalFixedCameras} fixed cameras, then each pending/running job is refreshed every second.`}
       >
         <form className={styles.jobForm} onSubmit={handleStartJob}>
+          <label className={styles.checkboxLabel} htmlFor="maxFrames">
+            Frames per camera (1-300)
+            <input
+              id="maxFrames"
+              type="number"
+              min="1"
+              max="300"
+              step="1"
+              required
+              value={maxFrames}
+              disabled={startingJob}
+              aria-invalid={Boolean(frameCountError)}
+              aria-describedby="frame-count-hint"
+              onChange={(event) => {
+                setMaxFrames(event.target.value);
+                setFrameCountError(null);
+              }}
+            />
+          </label>
           <label className={styles.checkboxLabel}>
             <input
               type="checkbox"
               checked={saveFrames}
+              disabled={startingJob}
               onChange={(event) => setSaveFrames(event.target.checked)}
             />
             Save frames
@@ -435,6 +467,11 @@ export default function Dashboard() {
             {startingJob ? `Queueing ${totalFixedCameras} detection jobs...` : `Run detection across ${totalFixedCameras} cameras`}
           </button>
         </form>
+        <p id="frame-count-hint" className={styles.monitorHint}>
+          Each camera job processes up to the selected frame count (default 120), not continuous monitoring.
+          Larger counts take longer; pending and running jobs continue to refresh until they finish.
+        </p>
+        {frameCountError && <p role="alert">{frameCountError}</p>}
 
         <p className={styles.monitorHint}>
           Jobs are queued as <strong>pending</strong>, advance to <strong>running</strong> as processing begins, then end as
@@ -455,9 +492,11 @@ export default function Dashboard() {
               </>
             ) : (
               <>
-                <strong>All {monitoredJobs.length} detection jobs completed.</strong>
+                <strong>All {monitoredJobs.length} detection jobs finished: {completedJobsCount} complete, {failedJobsCount} failed.</strong>
                 <span>
-                  {accidentJobsCount === 0
+                  {failedJobsCount > 0
+                    ? 'Detection results are incomplete because some camera jobs failed.'
+                    : accidentJobsCount === 0
                     ? '0 accidents detected.'
                     : `${accidentJobsCount} camera${accidentJobsCount > 1 ? 's' : ''} reported accident events.`}
                 </span>

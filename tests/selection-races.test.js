@@ -123,7 +123,7 @@ test('Dashboard stale update refreshes the list without replacing a new selectio
     'react-router-dom': { Link: 'Link' },
     '../../constants/cameras.js': { FIXED_CAMERA_STREAM_URLS },
     '../../utils/formatters.js': formatters,
-    '../../services/api.js': { getJob() {}, startDetectionJob() {} },
+    '../../services/api.js': { getJob() {}, startDetectionJob() {}, parseMaxFrames() {} },
     '../../hooks/useDashboardData.js': {
       useDashboardData: () => ({
         stats: null, incidents: [incidentA, incidentB], cameras: [], jobs: [],

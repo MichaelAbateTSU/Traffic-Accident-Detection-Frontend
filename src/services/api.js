@@ -624,7 +624,22 @@ export async function getJobDetections(jobId, options = {}, request = {}) {
   return { items, meta: mapMeta(meta) };
 }
 
+export function parseMaxFrames(value) {
+  if (typeof value === 'string' && !/^\d+$/.test(value)) {
+    throw new Error('Frames per camera must be a whole number from 1 to 300.');
+  }
+  const frames = typeof value === 'string' ? Number(value) : value;
+  if (typeof frames !== 'number' || !Number.isInteger(frames) || frames < 1 || frames > 300) {
+    throw new Error('Frames per camera must be a whole number from 1 to 300.');
+  }
+  return frames;
+}
+
 export async function startDetectionJob(payload, request = {}) {
+  if (payload.max_frames !== undefined) {
+    if (typeof payload.max_frames !== 'number') throw new Error('max_frames must be an integer from 1 to 300.');
+    parseMaxFrames(payload.max_frames);
+  }
   const { data, meta } = await apiFetch('/detect-accident', {
     method: 'POST',
     body: payload,
