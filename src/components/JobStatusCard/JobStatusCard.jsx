@@ -111,6 +111,7 @@ export default function JobStatusCard({ job }) {
       </section>
       {job.message && <div className={styles.message}>{job.message}</div>}
       {job.error && <div className={styles.error}>{String(job.error)}</div>}
+      {job.monitorError && <div className={styles.error} role="alert">{job.monitorError}</div>}
     </article>
   );
 }

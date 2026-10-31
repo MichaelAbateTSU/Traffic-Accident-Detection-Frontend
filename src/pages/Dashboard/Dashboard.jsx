@@ -13,8 +13,8 @@ import DetectionSignalsChart from '../../components/charts/DetectionSignalsChart
 import StatusBadge from '../../components/StatusBadge/StatusBadge.jsx';
 import SectionCard from '../../components/SectionCard/SectionCard.jsx';
 import CameraPreviewCard from '../../components/CameraPreviewCard/CameraPreviewCard.jsx';
-import { getJob, parseMaxFrames, startDetectionJob } from '../../services/api.js';
-import { beginJobSubmission, endJobSubmission, recoverJobMonitor, saveJobMonitor } from '../../services/jobMonitor.js';
+import { parseMaxFrames, startDetectionJob } from '../../services/api.js';
+import { beginJobSubmission, endJobSubmission, getMonitoredJob, recoverJobMonitor, saveJobMonitor } from '../../services/jobMonitor.js';
 import { FIXED_CAMERA_STREAM_URLS } from '../../constants/cameras.js';
 import { formatDateTime, formatNumber, formatPercent } from '../../utils/formatters.js';
 import { useDashboardData } from '../../hooks/useDashboardData.js';
@@ -115,7 +115,7 @@ export default function Dashboard() {
   const [recoveryKey, setRecoveryKey] = useState(0);
   const totalFixedCameras = FIXED_CAMERA_STREAM_URLS.length;
   const pollingTimerRef = useRef(null);
-  const refreshingJobsRef = useRef(false);
+  const pollingRequestRef = useRef(null);
   const monitoredJobsRef = useRef([]);
   const startingJobRef = useRef(false);
   const recoveringMonitorRef = useRef(true);
@@ -144,11 +144,12 @@ export default function Dashboard() {
       clearInterval(pollingTimerRef.current);
       pollingTimerRef.current = null;
     }
+    pollingRequestRef.current?.abort();
+    pollingRequestRef.current = null;
   }, []);
 
   const refreshPendingJobs = useCallback(async () => {
-    if (refreshingJobsRef.current) return;
-    refreshingJobsRef.current = true;
+    if (pollingRequestRef.current || !monitorMountedRef.current) return;
 
     const currentJobs = monitoredJobsRef.current;
     const pendingIds = currentJobs
@@ -157,63 +158,56 @@ export default function Dashboard() {
       .filter(Boolean);
 
     if (!pendingIds.length) {
-      refreshingJobsRef.current = false;
       stopBatchPolling();
       return;
     }
 
+    const controller = new AbortController();
+    pollingRequestRef.current = controller;
     try {
-      const responses = await Promise.all(
+      await Promise.all(
         pendingIds.map(async (jobId) => {
+          let item;
+          let readError;
           try {
-            const { item } = await getJob(jobId);
-            return { jobId, item };
+            ({ item } = await getMonitoredJob(jobId, { signal: controller.signal }));
           } catch (error) {
-            return { jobId, error };
+            if (error.name === 'AbortError') return;
+            readError = error;
+          }
+          if (!monitorMountedRef.current || pollingRequestRef.current !== controller || controller.signal.aborted) return;
+
+          const next = monitoredJobsRef.current.map((jobItem) => {
+            if (jobItem.id !== jobId) return jobItem;
+            if (readError) {
+              return { ...jobItem, monitorError: `Cannot refresh job ${jobId}: ${readError.message}` };
+            }
+            return normalizeMonitorJob({
+              ...jobItem,
+              ...item,
+              monitorError: null,
+              events: item.events?.length ? item.events : jobItem.events ?? [],
+              frames: mergeFrameImages(jobItem.frames ?? [], item.frames ?? []),
+            });
+          });
+          monitoredJobsRef.current = next;
+          setMonitoredJobs(next);
+          setJobError(next.map((jobItem) => jobItem.monitorError).filter(Boolean).join(' ') || null);
+          if (next.length > 0 && next.every((jobItem) => isTerminalStatus(jobItem.status))) {
+            stopBatchPolling();
+            setBatchStartError(null);
           }
         }),
       );
-      if (!monitorMountedRef.current) return;
-
-      let allCompleteAfterRefresh = false;
-      setMonitoredJobs((current) => {
-        const responseById = new Map(responses.map((response) => [response.jobId, response]));
-        const next = current.map((jobItem) => {
-          const response = responseById.get(jobItem.id);
-          if (!response) return jobItem;
-          if (response.item) {
-            return normalizeMonitorJob({
-              ...jobItem,
-              ...response.item,
-              events: response.item.events?.length ? response.item.events : jobItem.events ?? [],
-              frames: mergeFrameImages(jobItem.frames ?? [], response.item.frames ?? []),
-            });
-          }
-          return {
-            ...jobItem,
-            error: response.error?.message ?? 'Failed to refresh job status.',
-          };
-        });
-        allCompleteAfterRefresh = next.length > 0 && next.every((jobItem) => isTerminalStatus(jobItem.status));
-        monitoredJobsRef.current = next;
-        return next;
-      });
-
-      const firstError = responses.find((response) => response.error);
-      setJobError(firstError ? firstError.error.message : null);
-
-      if (allCompleteAfterRefresh) {
-        stopBatchPolling();
-        setBatchStartError(null);
-      }
     } finally {
-      refreshingJobsRef.current = false;
+      if (pollingRequestRef.current === controller) pollingRequestRef.current = null;
     }
   }, [stopBatchPolling]);
 
   useEffect(() => {
     const controller = new AbortController();
     let active = true;
+    stopBatchPolling();
     recoveringMonitorRef.current = true;
     setRecoveringMonitor(true);
     setMonitorRecoveryError(null);

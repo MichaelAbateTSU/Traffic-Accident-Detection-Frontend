@@ -79,13 +79,13 @@ async function createDashboard({ failAt = Infinity, status = 'pending', submissi
         if (submissions++ === failAt) throw new Error('Submission unavailable');
         return { item: { id: `job-${submissions}`, status, peakConfidence: 0.87 } };
       },
-      async getJob(id) {
-        refreshedIds.push(id);
-        return { item: { id, status } };
-      },
     },
     '../../services/jobMonitor.js': {
       beginJobSubmission() {}, endJobSubmission() {},
+      async getMonitoredJob(id) {
+        refreshedIds.push(id);
+        return { item: { id, status } };
+      },
       recoverJobMonitor: async () => ({ jobs: [], warning: null, error: null }),
       saveJobMonitor(ids, warning) { persisted.push({ ids: [...ids], warning }); },
     },
