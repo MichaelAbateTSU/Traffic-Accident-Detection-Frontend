@@ -63,7 +63,7 @@ test('dashboard fetch/refresh keeps automatically resolved completed-job frames 
     '../../constants/cameras.js': { FIXED_CAMERA_STREAM_URLS },
     '../../utils/formatters.js': formatters,
     '../../services/api.js': { getJob() {}, parseMaxFrames() {}, startDetectionJob() {} },
-    '../../services/jobMonitor.js': { beginJobSubmission() {}, endJobSubmission() {}, saveJobMonitor() {}, recoverJobMonitor: async () => ({ jobs: [] }) },
+    '../../services/jobMonitor.js': { getMonitoredJob() {}, beginJobSubmission() {}, endJobSubmission() {}, saveJobMonitor() {}, recoverJobMonitor: async () => ({ jobs: [] }) },
     '../../hooks/useDashboardData.js': { useDashboardData: options => {
       assert.equal(options.incidentsStatus, 'all');
       return data;
