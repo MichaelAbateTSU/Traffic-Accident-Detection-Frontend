@@ -180,6 +180,7 @@ try {
       })()`);
       const firstIndex = job.frames[page * 3].frame_index;
       await wait(`${gallery}.querySelector("h4")?.textContent===${JSON.stringify(`Frame ${firstIndex}`)}`);
+      await wait(`${gallery}.querySelectorAll("img").length===9`);
       for (let image = 0; image < 9; image++) {
         await evaluate(`${gallery}.querySelectorAll("img")[${image}].scrollIntoView()`);
         await wait(`(() => {
