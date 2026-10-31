@@ -1,5 +1,5 @@
 import AuthenticatedImage from '../AuthenticatedImage/AuthenticatedImage.jsx';
-import { formatDateTime, formatPercent } from '../../utils/formatters.js';
+import { formatDateTime, formatNumber } from '../../utils/formatters.js';
 import StatusBadge from '../StatusBadge/StatusBadge.jsx';
 import styles from './JobStatusCard.module.css';
 
@@ -81,11 +81,12 @@ export default function JobStatusCard({ job }) {
         <span><strong>Max frames:</strong> {job.maxFrames ?? '—'}</span>
         <span><strong>Save frames:</strong> {job.saveFrames == null ? '—' : job.saveFrames ? 'Yes' : 'No'}</span>
         <span className={accidentClassName}><strong>Accident detected:</strong> {accidentLabel}</span>
-        <span><strong>Peak confidence:</strong> {formatPercent(job.peakConfidence, 2)}</span>
+        <span><strong>Peak heuristic accident score (0-1):</strong> {formatNumber(job.peakConfidence, 2)}</span>
         <span><strong>Events:</strong> {eventsCount}</span>
         <span><strong>Created:</strong> {formatDateTime(job.createdAt)}</span>
         <span><strong>Completed:</strong> {formatDateTime(job.completedAt)}</span>
       </div>
+      <p>Accident scores are smoothed weighted heuristics, not calibrated probabilities or YOLO object-detection confidence.</p>
       {job.streamUrl && (
         <a href={job.streamUrl} target="_blank" rel="noreferrer" className={styles.link}>
           Open stream
@@ -129,8 +130,8 @@ export default function JobStatusCard({ job }) {
                 <span><strong>Frame:</strong> {eventItem.frameIdx ?? '—'}</span>
                 <span><strong>Timestamp:</strong> {eventItem.timestampSec ?? '—'}s</span>
                 <span><strong>Detected:</strong> {eventItem.accidentDetected == null ? '—' : eventItem.accidentDetected ? 'Yes' : 'No'}</span>
-                <span><strong>Confidence:</strong> {formatPercent(eventItem.confidenceScore, 2)}</span>
-                <span><strong>Raw score:</strong> {formatPercent(eventItem.rawScore, 2)}</span>
+                <span><strong>Heuristic accident score (0-1):</strong> {formatNumber(eventItem.confidenceScore, 2)}</span>
+                <span><strong>Raw heuristic score (0-1):</strong> {formatNumber(eventItem.rawScore, 2)}</span>
                 <span><strong>Bounding box:</strong> {formatBoundingBox(eventItem.boundingBox)}</span>
                 <span>
                   <strong>Tracks:</strong>{' '}

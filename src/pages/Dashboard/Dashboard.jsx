@@ -15,7 +15,7 @@ import SectionCard from '../../components/SectionCard/SectionCard.jsx';
 import CameraPreviewCard from '../../components/CameraPreviewCard/CameraPreviewCard.jsx';
 import { getJob, parseMaxFrames, startDetectionJob } from '../../services/api.js';
 import { FIXED_CAMERA_STREAM_URLS } from '../../constants/cameras.js';
-import { formatDateTime, formatPercent } from '../../utils/formatters.js';
+import { formatDateTime, formatNumber, formatPercent } from '../../utils/formatters.js';
 import { useDashboardData } from '../../hooks/useDashboardData.js';
 import styles from './Dashboard.module.css';
 
@@ -338,7 +338,7 @@ export default function Dashboard() {
     <main className={styles.page}>
       <div className={styles.header}>
         <h1 className={styles.title}>Operations Dashboard</h1>
-        <span className={styles.subtitle}>Real-time traffic incident monitoring and detection confidence overview</span>
+        <span className={styles.subtitle}>Traffic incident monitoring and heuristic accident scores (0-1), not calibrated probabilities</span>
       </div>
 
       {health && (
@@ -554,12 +554,12 @@ export default function Dashboard() {
         {latestCompletedJob && (
           <p className={styles.sectionMeta}>
             Latest completed job (<strong>{latestCompletedJob.id}</strong>) returned <strong>{latestCompletedEventCount}</strong> events.
-            Peak confidence: <strong>{formatPercent(latestCompletedJob.peakConfidence, 2)}</strong>.
+            Peak heuristic accident score (0-1): <strong>{formatNumber(latestCompletedJob.peakConfidence, 2)}</strong>.
           </p>
         )}
       </SectionCard>
 
-      <SectionCard title="Detection Analytics" description="Confidence evolution and supporting signal strengths from the latest completed run">
+      <SectionCard title="Detection Analytics" description="Smoothed heuristic accident scores and supporting signals, not calibrated probabilities">
         <div className={styles.chartsGrid}>
           <ConfidenceTrendChart events={detections} />
           <DetectionSignalsChart signalValues={topSignals} />

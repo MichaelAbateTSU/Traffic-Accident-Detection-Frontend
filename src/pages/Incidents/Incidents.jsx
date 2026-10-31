@@ -134,7 +134,7 @@ export default function Incidents() {
       <div className={styles.header}>
         <div>
           <h1 className={styles.title}>Incidents</h1>
-          <span className={styles.subtitle}>All detected accidents and events</span>
+          <span className={styles.subtitle}>Detected events with heuristic accident scores (0-1), not calibrated probabilities</span>
         </div>
         <div className={styles.controls}>
           <div className={styles.filterGroup} role="group" aria-label="Filter incidents">
@@ -180,8 +180,8 @@ export default function Incidents() {
             >
               <option value="-detected_at">Newest</option>
               <option value="detected_at">Oldest</option>
-              <option value="-confidence_score">Confidence (High-Low)</option>
-              <option value="confidence_score">Confidence (Low-High)</option>
+              <option value="-confidence_score">Heuristic score (High-Low)</option>
+              <option value="confidence_score">Heuristic score (Low-High)</option>
             </select>
           </div>
           <input
@@ -220,7 +220,8 @@ export default function Incidents() {
             min="0"
             max="1"
             step="0.01"
-            placeholder="Min confidence (0-1)"
+            placeholder="Min heuristic accident score (0-1)"
+            aria-label="Minimum heuristic accident score (0-1), not a probability"
             value={minConfidence}
             onChange={(e) => {
               setMinConfidence(e.target.value);

@@ -60,7 +60,7 @@ async function createDashboard({ failAt = Infinity, status = 'pending' } = {}) {
       async startDetectionJob(payload) {
         payloads.push(payload);
         if (submissions++ === failAt) throw new Error('Submission unavailable');
-        return { item: { id: `job-${submissions}`, status } };
+        return { item: { id: `job-${submissions}`, status, peakConfidence: 0.87 } };
       },
       async getJob(id) {
         refreshedIds.push(id);
@@ -69,6 +69,7 @@ async function createDashboard({ failAt = Infinity, status = 'pending' } = {}) {
     },
     '../../utils/formatters.js': {
       formatDateTime: String,
+      formatNumber: String,
       formatPercent: String,
     },
     '../../hooks/useDashboardData.js': {
@@ -158,6 +159,16 @@ test('already terminal accepted jobs do not start a polling timer', async () => 
   assert.equal(dashboard.timers.size, 0);
   assert.equal(dashboard.refreshedIds.length, 0);
   assert.equal(dashboard.render().filter((node) => node.type === 'JobStatusCard').length, 9);
+});
+
+test('Dashboard explains peak accident scores as heuristics instead of confidence percentages', async () => {
+  const dashboard = await createDashboard({ status: 'complete' });
+  await dashboard.submit();
+  const output = JSON.stringify(dashboard.render());
+  assert.match(output, /Peak heuristic accident score \(0-1\)/);
+  assert.match(output, /not calibrated probabilities/);
+  assert.match(output, /0\.87/);
+  assert.doesNotMatch(output, /Peak confidence/);
 });
 
 for (const finalStatus of ['complete', 'failed']) {

@@ -117,6 +117,8 @@ Run the focused API URL, Dashboard job-submission, and interleaved camera/incide
 
 ### Operator workflows
 
+Accident scores (`confidence_score`, `peak_confidence`, and `raw_score` in the API) are 0-1 weighted heuristics from `AccidentScorer`; the accident/peak scores are smoothed. They are **not calibrated accident probabilities** or YOLO object-detection confidence. The UI displays them as decimal heuristic scores, with matching filter/sort labels. API field names, numeric values, sorting, and filtering remain unchanged. YOLO's confidence for individual object detections is a separate quantity.
+
 - **Detection job batches** — the Dashboard retains and monitors jobs already accepted if a later camera submission fails. A separate submission warning reports the partial failure and remains visible during successful polling, until another batch is started.
 - **Frames per camera** — the Dashboard defaults to 120 frames per camera and accepts whole numbers from 1 to 300. Every camera submission includes the selected `max_frames`; invalid values do not submit jobs or clear the current monitor. Jobs are bounded, not continuous monitoring, and remain polled until complete or failed. Direct API callers may omit `max_frames` to retain the backend's legacy five-frame default.
 - **Resolve / reopen incidents** — the incident detail panel (Dashboard and Incidents pages) has *Mark resolved* / *Reopen incident* buttons and an operator note (max 500 characters). Changes are held in backend memory and reflected in lists, the dashboard, and CSV exports while the associated job is retained. They are lost when the backend restarts or the job expires; they are not durably persisted.

@@ -3,7 +3,7 @@ import test from 'node:test';
 import { componentHarness, deferred } from './componentHarness.js';
 import { FIXED_CAMERA_STREAM_URLS } from '../src/constants/cameras.js';
 
-const formatters = { formatDateTime: String, formatPercent: String };
+const formatters = { formatDateTime: String, formatNumber: String, formatPercent: String };
 const incidentA = { id: 'A', cameraId: 'camera-A', note: 'note A', resolved: false, status: 'active' };
 const incidentB = { id: 'B', cameraId: 'camera-B', note: 'note B', resolved: false, status: 'active' };
 
