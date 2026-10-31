@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import CameraPlayer from '../../components/CameraPlayer/CameraPlayer.jsx';
 import StatusBadge from '../../components/StatusBadge/StatusBadge.jsx';
 import { getStreamUrlForCameraId } from '../../constants/cameras.js';
-import { getCameraStatus } from '../../services/api.js';
+import { getCameraLatestFrame, getCameraStatus } from '../../services/api.js';
 import { formatDateTime } from '../../utils/formatters.js';
 import styles from './CameraView.module.css';
 
@@ -35,6 +35,34 @@ export default function CameraView() {
   const [error, setError] = useState(null);
   const [playerLoading, setPlayerLoading] = useState(false);
   const [playerError, setPlayerError] = useState(null);
+  const [latestFrame, setLatestFrame] = useState(null);
+  const [latestFrameError, setLatestFrameError] = useState(null);
+
+  useEffect(() => {
+    if (!cameraId) return undefined;
+    let cancelled = false;
+    const controller = new AbortController();
+
+    const loadFrame = async () => {
+      try {
+        const { item } = await getCameraLatestFrame(cameraId, { signal: controller.signal });
+        if (cancelled) return;
+        setLatestFrame(item);
+        setLatestFrameError(null);
+      } catch (err) {
+        if (err.name === 'AbortError' || cancelled) return;
+        setLatestFrameError(err.message);
+      }
+    };
+
+    loadFrame();
+    const interval = setInterval(loadFrame, 10000);
+    return () => {
+      cancelled = true;
+      controller.abort();
+      clearInterval(interval);
+    };
+  }, [cameraId]);
 
   useEffect(() => {
     if (!cameraId) return undefined;
@@ -164,6 +192,26 @@ export default function CameraView() {
             {error && <span className={styles.error}>Status refresh failed</span>}
           </div>
         </div>
+
+        <aside className={styles.latestFrame} aria-label="Latest detection frame">
+          <span className={styles.latestFrameTitle}>Latest detection frame</span>
+          {latestFrame?.url ? (
+            <a href={latestFrame.url} target="_blank" rel="noreferrer">
+              <img src={latestFrame.url} alt={`Latest processed frame for ${camera.name ?? camera.id}`} />
+            </a>
+          ) : (
+            <span className={styles.latestFrameEmpty}>
+              {latestFrameError ? 'Unable to load latest frame' : 'No processed frames yet'}
+            </span>
+          )}
+          {latestFrame && (
+            <span className={styles.latestFrameMeta}>
+              Frame {latestFrame.frameIndex ?? '—'}
+              {latestFrame.capturedAt ? ` · ${formatDateTime(latestFrame.capturedAt)}` : ''}
+              {latestFrame.jobStatus ? ` · job ${latestFrame.jobStatus}` : ''}
+            </span>
+          )}
+        </aside>
       </section>
     </main>
   );

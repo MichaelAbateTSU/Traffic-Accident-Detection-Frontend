@@ -170,3 +170,9 @@
 @media (max-width: 640px) {
   .page { padding: 1rem; }
 }
+
+.exportError {
+  margin: 0 0 0.5rem;
+  color: #ff7b7b;
+  font-size: 0.85rem;
+}

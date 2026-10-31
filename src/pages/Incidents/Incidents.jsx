@@ -3,7 +3,7 @@ import IncidentTable from '../../components/IncidentTable/IncidentTable.jsx';
 import DataState from '../../components/DataState/DataState.jsx';
 import MetaInfoPanel from '../../components/MetaInfoPanel/MetaInfoPanel.jsx';
 import IncidentDetailPanel from '../../components/IncidentDetailPanel/IncidentDetailPanel.jsx';
-import { getIncidentById, getIncidents } from '../../services/api.js';
+import { exportIncidentsCsv, getIncidentById, getIncidents } from '../../services/api.js';
 import { useIncidentsTableState } from '../../hooks/useIncidentsTableState.js';
 import styles from './Incidents.module.css';
 
@@ -20,6 +20,8 @@ export default function Incidents() {
   const [detailError, setDetailError] = useState(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState(null);
   const tableState = useIncidentsTableState();
   const {
     page,
@@ -97,6 +99,28 @@ export default function Incidents() {
     loadDetail();
     return () => controller.abort();
   }, [selectedIncidentId]);
+
+  const handleExport = async () => {
+    setExporting(true);
+    setExportError(null);
+    try {
+      await exportIncidentsCsv(debouncedQuery);
+    } catch (err) {
+      setExportError(err.message ?? 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleIncidentUpdated = (updated) => {
+    setSelectedIncident(updated);
+    const filteredOut = status !== 'all' && updated.status !== status;
+    if (filteredOut) {
+      setRetryKey((value) => value + 1);
+      return;
+    }
+    setIncidents((items) => items.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)));
+  };
 
   const pagination = meta?.pagination ?? {};
   const totalItems = pagination.total_items ?? incidents.length;
@@ -220,8 +244,18 @@ export default function Incidents() {
               setPage(1);
             }}
           />
+          <button
+            type="button"
+            className={styles.actionBtn}
+            onClick={handleExport}
+            disabled={exporting}
+            title="Download all incidents matching the current filters as CSV"
+          >
+            {exporting ? 'Exporting…' : 'Export CSV'}
+          </button>
         </div>
       </div>
+      {exportError && <p className={styles.exportError} role="alert">CSV export failed: {exportError}</p>}
 
       <div className={styles.countRow}>
         {!loading && (
@@ -275,7 +309,7 @@ export default function Incidents() {
           emptyMessage="Click an incident row to load detailed data."
           loadingMessage="Loading incident detail..."
         >
-          <IncidentDetailPanel incident={selectedIncident} />
+          <IncidentDetailPanel incident={selectedIncident} onIncidentUpdated={handleIncidentUpdated} />
           <MetaInfoPanel meta={detailMeta} title="Incident detail meta" />
         </DataState>
       </section>

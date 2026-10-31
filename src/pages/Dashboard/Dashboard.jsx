@@ -142,6 +142,7 @@ export default function Dashboard() {
       .filter(Boolean);
 
     if (!pendingIds.length) {
+      refreshingJobsRef.current = false;
       stopBatchPolling();
       return;
     }
@@ -397,7 +398,13 @@ export default function Dashboard() {
         />
         {selectedIncident && (
           <div className={styles.incidentDetailWrap}>
-            <IncidentDetailPanel incident={selectedIncident} />
+            <IncidentDetailPanel
+              incident={selectedIncident}
+              onIncidentUpdated={(updated) => {
+                setSelectedIncident(updated);
+                reload();
+              }}
+            />
           </div>
         )}
       </SectionCard>

@@ -1,4 +1,18 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+const TRIMMED_API_BASE = API_BASE.endsWith('/') ? API_BASE.slice(0, -1) : API_BASE;
+
+/**
+ * Backend artifact URLs are rooted at the API host (e.g. "/artifacts/<job>/...").
+ * Prefix them with the API base so <img> tags work when the UI is served from another origin.
+ */
+export function resolveAssetUrl(url) {
+  if (url === undefined || url === null || url === '') return null;
+  const value = String(url);
+  if (/^(?:[a-z][a-z\d+\-.]*:)?\/\//i.test(value) || value.startsWith('data:') || value.startsWith('blob:')) {
+    return value;
+  }
+  return `${TRIMMED_API_BASE}${value.startsWith('/') ? '' : '/'}${value}`;
+}
 
 const SORT_REMAP = {
   '-confidence_score': '-confidence',
@@ -23,7 +37,8 @@ function buildQuery(params = {}) {
 }
 
 function isEnvelope(payload) {
-  return payload && typeof payload === 'object' && ('data' in payload || 'meta' in payload || 'error' in payload);
+  // Bare resources such as JobResult carry their own `error` field, so only `data`/`meta` identify an envelope.
+  return Boolean(payload) && typeof payload === 'object' && !Array.isArray(payload) && ('data' in payload || 'meta' in payload);
 }
 
 function pickFirst(...values) {
@@ -122,9 +137,9 @@ function mapFrameImagesApiToUi(item = {}) {
   const frameIndex = numberOrNull(pickFirst(item.frame_index, item.frameIndex, null));
   return {
     frameIndex,
-    capture: pickFirst(item.capture, null),
-    captureAnnotated: pickFirst(item.capture_annotated, item.captureAnnotated, null),
-    pipelineOutput: pickFirst(item.pipeline_output, item.pipelineOutput, null),
+    capture: resolveAssetUrl(pickFirst(item.capture, null)),
+    captureAnnotated: resolveAssetUrl(pickFirst(item.capture_annotated, item.captureAnnotated, null)),
+    pipelineOutput: resolveAssetUrl(pickFirst(item.pipeline_output, item.pipelineOutput, null)),
     raw: item,
   };
 }
@@ -188,9 +203,8 @@ function mapDetectionEventApiToUi(item = {}) {
 
 export async function apiFetch(path, { method = 'GET', params, body, signal } = {}) {
   const qs = buildQuery(params);
-  const trimmedBase = API_BASE.endsWith('/') ? API_BASE.slice(0, -1) : API_BASE;
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-  const url = `${trimmedBase}${normalizedPath}${qs ? `?${qs}` : ''}`;
+  const url = `${TRIMMED_API_BASE}${normalizedPath}${qs ? `?${qs}` : ''}`;
 
   const headers = { Accept: 'application/json' };
   if (body !== undefined) {
@@ -280,6 +294,9 @@ export function mapIncidentSummaryApiToUi(item = {}) {
     createdAt: pickFirst(item.created_at, item.createdAt, null),
     completedAt: pickFirst(item.completed_at, item.completedAt, null),
     signalValues: mapSignalValues(item.signal_values ?? item.signalValues ?? {}),
+    resolvedAt: pickFirst(item.resolved_at, item.resolvedAt) ?? null,
+    note: pickFirst(item.note) ?? null,
+    manuallyUpdated: Boolean(pickFirst(item.manually_updated, item.manuallyUpdated, false)),
     raw: item,
   };
 }
@@ -355,9 +372,103 @@ export function mapHealthApiToUi(data = {}) {
   };
 }
 
-export async function getLiveFrame(cameraId) {
-  // TODO: replace with real endpoint, e.g. GET /cameras/{id}/frame
-  return `https://placehold.co/640x360/1e2535/8b9ab4?text=Camera+${cameraId}`;
+function mapLatestFrameApiToUi(item = {}) {
+  const imageUrl = resolveAssetUrl(pickFirst(item.image_url, item.imageUrl, null));
+  const annotatedUrl = resolveAssetUrl(pickFirst(item.annotated_url, item.annotatedUrl, null));
+  return {
+    cameraId: pickFirst(item.camera_id, item.cameraId, null),
+    jobId: pickFirst(item.job_id, item.jobId, null),
+    frameIndex: numberOrNull(pickFirst(item.frame_index, item.frameIndex, null)),
+    imageUrl,
+    annotatedUrl,
+    url: annotatedUrl ?? imageUrl,
+    capturedAt: pickFirst(item.captured_at, item.capturedAt, null),
+    jobStatus: pickFirst(item.job_status, item.jobStatus, null),
+    raw: item,
+  };
+}
+
+/**
+ * Latest processed frame for a camera, or null when the backend has none yet (404).
+ */
+export async function getCameraLatestFrame(cameraId, request = {}) {
+  try {
+    const { data, meta } = await apiFetch(`/cameras/${encodeURIComponent(cameraId)}/latest-frame`, {
+      signal: request.signal,
+    });
+    return { item: mapLatestFrameApiToUi(data ?? {}), meta: mapMeta(meta) };
+  } catch (error) {
+    if (error?.status === 404) return { item: null, meta: null };
+    throw error;
+  }
+}
+
+/**
+ * URL of the latest annotated frame for a camera, or null if none exists yet.
+ */
+export async function getLiveFrame(cameraId, request = {}) {
+  const { item } = await getCameraLatestFrame(cameraId, request);
+  return item?.url ?? null;
+}
+
+export async function updateIncidentStatus(incidentId, { status, note } = {}, request = {}) {
+  const body = { status };
+  if (note !== undefined) body.note = note;
+  const { data, meta } = await apiFetch(`/incidents/${encodeURIComponent(incidentId)}`, {
+    method: 'PATCH',
+    body,
+    signal: request.signal,
+  });
+  return { item: mapIncidentDetailApiToUi(data ?? {}), meta: mapMeta(meta) };
+}
+
+function buildIncidentFilterParams(options = {}) {
+  const rawSort = options.sort ?? '-detected_at';
+  return {
+    status: options.status,
+    min_confidence: options.minConfidence,
+    job_id: options.jobId,
+    camera_id: options.cameraId,
+    detection_type: options.detectionType,
+    start_time: options.startTime,
+    end_time: options.endTime,
+    sort: SORT_REMAP[rawSort] ?? rawSort,
+  };
+}
+
+/**
+ * Download incidents matching the given filters as CSV via GET /incidents/export.
+ */
+export async function exportIncidentsCsv(options = {}, request = {}) {
+  const qs = buildQuery(buildIncidentFilterParams(options));
+  const response = await fetch(`${TRIMMED_API_BASE}/incidents/export${qs ? `?${qs}` : ''}`, {
+    headers: { Accept: 'text/csv' },
+    signal: request.signal,
+  });
+  if (!response.ok) {
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (_) {
+      payload = null;
+    }
+    throw normalizeApiError(response.status, payload);
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get('Content-Disposition') ?? '';
+  const match = disposition.match(/filename="?([^";]+)"?/i);
+  const filename = match?.[1] ?? 'incidents.csv';
+
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+  return { filename, size: blob.size };
 }
 
 export async function getCameraStatus(request = {}) {
@@ -368,19 +479,11 @@ export async function getCameraStatus(request = {}) {
 
 export async function getIncidents(options = {}, request = {}) {
   const normalized = typeof options === 'number' ? { pageSize: options } : options;
-  const rawSort = normalized.sort ?? '-detected_at';
   const { data, meta } = await apiFetch('/incidents', {
     params: {
       page: normalized.page ?? 1,
       page_size: normalized.pageSize ?? 20,
-      status: normalized.status,
-      min_confidence: normalized.minConfidence,
-      job_id: normalized.jobId,
-      camera_id: normalized.cameraId,
-      detection_type: normalized.detectionType,
-      start_time: normalized.startTime,
-      end_time: normalized.endTime,
-      sort: SORT_REMAP[rawSort] ?? rawSort,
+      ...buildIncidentFilterParams(normalized),
     },
     signal: request.signal,
   });
@@ -422,7 +525,7 @@ export async function getDashboard(options = {}, request = {}) {
 }
 
 export async function getIncidentById(incidentId, request = {}) {
-  const { data, meta } = await apiFetch(`/incidents/${incidentId}`, {
+  const { data, meta } = await apiFetch(`/incidents/${encodeURIComponent(incidentId)}`, {
     signal: request.signal,
   });
   return { item: mapIncidentDetailApiToUi(data), meta: mapMeta(meta) };
