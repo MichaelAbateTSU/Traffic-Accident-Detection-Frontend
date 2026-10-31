@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import resource
 import secrets
+import shutil
 import subprocess
 import tempfile
 import time
@@ -122,31 +123,40 @@ https://frontend.integration.test:8454 {
             raise RuntimeError("Production model startup blocked")
         stage = "trusted_test_https_health"
         https_health = command(
+            "sudo", "--non-interactive", "nsenter", "--target", str(state["State"]["Pid"]), "--net",
             "curl", "--noproxy", "*", "--fail", "--silent",
             "--connect-timeout", "3", "--max-time", "5",
             "--cacert", str(temp / "server.crt"),
-            "--resolve", "api.integration.test:8453:172.29.68.2",
+            "--resolve", "api.integration.test:8453:127.0.0.1",
             "https://api.integration.test:8453/health", capture=True,
         )
         assert json.loads(https_health.stdout)["model_loaded"]
         print(json.dumps({"temporary_ca_https_health_verified": True}), flush=True)
         stage = "actual_browser"
         browser = subprocess.Popen([
+            "sudo", "--non-interactive", "nsenter", "--target", str(state["State"]["Pid"]), "--net",
             "google-chrome", "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
             "--disable-gpu", "--no-proxy-server", "--ignore-certificate-errors",
             "--disable-background-networking", "--disable-breakpad", "--disable-crash-reporter",
             "--disk-cache-size=0", "--media-cache-size=0",
-            "--host-resolver-rules=MAP frontend.integration.test 172.29.68.2, MAP api.integration.test 172.29.68.2",
+            "--host-resolver-rules=MAP frontend.integration.test 127.0.0.1, MAP api.integration.test 127.0.0.1",
             "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=9225",
             f"--user-data-dir={temp / 'chrome-profile'}", "about:blank",
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
         for attempt in range(30):
-            try:
-                with urllib.request.urlopen("http://127.0.0.1:9225/json/version", timeout=1):
-                    break
-            except Exception:
-                time.sleep(0.2)
-        result = command("node", str(ROOT / "browser.mjs"), capture=True, check=False, timeout=240)
+            readiness = command(
+                "sudo", "--non-interactive", "nsenter", "--target", str(state["State"]["Pid"]), "--net",
+                "curl", "--fail", "--silent", "--max-time", "1", "http://127.0.0.1:9225/json/version",
+                check=False, capture=True,
+            )
+            if readiness.returncode == 0:
+                break
+            time.sleep(0.2)
+        result = command(
+            "sudo", "--non-interactive", "--preserve-env=API_TOKEN", "nsenter",
+            "--target", str(state["State"]["Pid"]), "--net",
+            shutil.which("node"), str(ROOT / "browser.mjs"), capture=True, check=False, timeout=240,
+        )
         safe = json.loads(result.stdout)
         print(json.dumps(safe | {
             "frontend_revision": FRONTEND, "backend_revision": BACKEND,
@@ -177,7 +187,10 @@ print(json.dumps({'artifact_file_count':artifact_files,'metadata_only':metadata_
         if result.returncode:
             raise RuntimeError("Browser/live smoke did not complete")
 except Exception as error:
-    print(json.dumps({"status": "bounded_experiment_blocked", "stage": stage, "error_type": type(error).__name__}), flush=True)
+    evidence = {"status": "bounded_experiment_blocked", "stage": stage, "error_type": type(error).__name__}
+    if isinstance(error, subprocess.CalledProcessError):
+        evidence["command_exit_code"] = error.returncode
+    print(json.dumps(evidence), flush=True)
     raise SystemExit(1)
 finally:
     if browser:
