@@ -97,7 +97,8 @@ https://frontend.integration.test:8454 {
                "python", "browser_serve.py")
         docker("run", "-d", "--name", "r2-browser-https", "--network", "container:r2-browser-api",
                "--user", f"{os.getuid()}:{os.getgid()}",
-               "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+               "--read-only", "--cap-drop", "ALL", "--cap-add", "NET_BIND_SERVICE",
+               "--security-opt", "no-new-privileges",
                "--memory", "128m", "--memory-swap", "128m", "--pids-limit", "64",
                "--log-driver", "none", "--ulimit", "core=0",
                "--tmpfs", "/data:size=4m,mode=1777", "--tmpfs", "/config:size=4m,mode=1777",
