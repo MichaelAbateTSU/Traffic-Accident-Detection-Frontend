@@ -27,7 +27,7 @@ jobs:
           path: backend
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: 227c581d96b78199d1806e1cffabe35f8728959c
+          ref: fb497788255f626cfc587c8782b19b3d9476d65a
           persist-credentials: false
           path: frontend
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -36,7 +36,7 @@ jobs:
       - name: Build exact applications before any live admission
         run: |
           test "$(git -C backend rev-parse HEAD)" = 21cb418e673fc944bbe2ca41bddf6d11b04c4b63
-          test "$(git -C frontend rev-parse HEAD)" = 227c581d96b78199d1806e1cffabe35f8728959c
+          test "$(git -C frontend rev-parse HEAD)" = fb497788255f626cfc587c8782b19b3d9476d65a
           cd frontend
           npm ci --quiet
           npm test
