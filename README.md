@@ -115,9 +115,9 @@ src/
     StatCard/       Dashboard metric card
     StatusBadge/    Online / Warning / Offline pill
   pages/
-    Dashboard/      Overview: stats + recent incidents
+    Dashboard/      Overview: stats + recent alarm-frame records
     LiveFeed/       Live YOLO-processed camera streams
-    Incidents/      Full incident history with filters
+    Incidents/      Full alarm-frame record history with review filters
     Settings/       API config & detection preferences
   services/
     api.js          Backend API wrapper (stub → real)
@@ -152,12 +152,16 @@ Accident scores (`confidence_score`, `peak_confidence`, and `raw_score` in the A
 
 Event `timestamp_sec` is displayed as **processing elapsed time**: wall-clock seconds since job start, not a source-video/media timestamp. The API value is unchanged.
 
+**Alarm-frame records, not unique accidents:** the backend emits one event/incident record per processed frame while its heuristic alarm is active. Consecutive records can belong to one alarm episode; neither a record nor its score confirms an accident. The UI preserves every record without grouping, discarding or deduplicating it. `incidents_today` is displayed as **Alarm Frames Today**, not a count of unique accidents. API `active`/`resolved` values are displayed as **Review open/Review closed**: operator workflow states, not proof that a physical incident or live alarm is active or cleared.
+
+**Nonfailed-job ratio, not system uptime:** the compatibility field `uptime_percent` is the proportion of nonfailed jobs in the backend window, including queued/running jobs. The dashboard's 30-day ratio displays the backend value unchanged and explains that an empty window returns 100%. This convention is not evidence of availability or successfully completed inference; the UI does not invent a denominator or label the metric as measured uptime.
+
 - **Detection job batches** — the Dashboard retains and monitors jobs already accepted if a later camera submission fails. A separate submission warning reports the partial failure and remains visible during successful polling, until another batch is started. Overlapping starts are blocked while submission is in progress or accepted jobs are pending/running; all accepted jobs must finish before a new batch can replace the monitor.
 - **Monitor recovery** — non-secret accepted job IDs and partial-submission warnings are saved per backend URL in browser storage, never the operator token. After navigation or reload/re-authentication, the Dashboard restores saved jobs and paginates the backend's pending/running job listing before permitting new submissions. Listing/recovery failures display a retry action and keep new batches blocked. Expired jobs (404) are explicitly marked failed/unavailable; uncertain job-status failures remain monitored. Recent Jobs includes nine jobs, enough for one full camera batch.
 - **Frames per source** — the Dashboard defaults to 120 frames per source and accepts whole numbers from 1 to 300. Every camera or single-video submission includes the selected `max_frames`; invalid values do not submit jobs or clear the current monitor. Shared submission, recovery and result messages refer to detection jobs, not an assumed camera batch. Jobs are bounded, not continuous monitoring, and remain polled until complete or failed. Direct API callers may omit `max_frames` to retain the backend's legacy five-frame default.
 - **Single approved video** — a separate Dashboard form submits one HTTPS video source using the same frame-count/Save frames controls and monitor. The operator must approve the **exact URL** in the backend source allowlist; rejection is displayed, not bypassed. Optional linked [ACCIDENT benchmark](https://accidentbench.github.io/) examples select 200 frames and Save frames without auto-submitting or downloading media into this repository. The source reports **CC BY-NC-SA 4.0 (noncommercial)** restrictions. CSV onset metadata is shown for `tbone (3)` (frame 18, 0.72 s; website label differs from CSV category) and `single (3)` (frame 148, 6.644433 s; at least 149 decoded frames). Index conventions and model accuracy are not verified; source timing is not the backend's processing elapsed time.
-- **Resolve / reopen incidents** — the incident detail panel (Dashboard and Incidents pages) has *Mark resolved* / *Reopen incident* buttons and an operator note (max 500 characters). Changes are held in backend memory and reflected in lists, the dashboard, and CSV exports while the associated job is retained. They are lost when the backend restarts or the job expires; they are not durably persisted.
-- **Export incidents** — the *Export CSV* button on the Incidents page downloads every incident matching the current filters and sort order.
+- **Close / reopen reviews** — the alarm-frame detail panel (Dashboard and Alarm Frames pages, still `/incidents`) has *Close review* / *Reopen review* buttons and an operator note (max 500 characters). These preserve the API's `resolved` / `active` values and do not clear the heuristic alarm. The backend persists operator state when its durable SQLite configuration is enabled; records remain subject to job retention/expiry.
+- **Export alarm-frame records** — the *Export CSV* button on the Alarm Frames page downloads every record matching the current filters and sort order, using the unchanged `/incidents/export` endpoint and CSV fields.
 - **Saved / latest detection frames** — enable *Save frames* in the Dashboard's Detection Job Monitor before starting a job to see saved frame images. The single-camera view (`/camera/:id`) shows the most recent saved annotated frame for that camera, refreshed every 10 seconds. Save frames is unchecked by default: jobs started with `save_frames=false` still run detection but produce no frame images.
 
 Saved-frame galleries in the Dashboard and job cards display three frames (nine images) per page, with Previous/Next and direct page selection preserving access to all 300 frames per job. Progressive polling updates the available pages without changing the selected page. Lazy images start authenticated blob requests only when near the viewport; changing pages unmounts images, aborts requests, and revokes object URLs. Browsers without IntersectionObserver still fetch only the bounded rendered page.
@@ -166,8 +170,8 @@ Saved-frame galleries in the Dashboard and job cards display three frames (nine 
 
 | Route | Page | Description |
 |---|---|---|
-| `/` | Dashboard | Stats overview + recent incidents |
+| `/` | Dashboard | Stats overview + recent alarm-frame records |
 | `/live` | Live Feed | Camera grid with polling |
-| `/incidents` | Incidents | Full incident table with filters, resolve/reopen, CSV export |
+| `/incidents` | Alarm Frames | Full alarm-frame record table with review filters, close/reopen review, CSV export |
 | `/camera/:id` | Camera View | Full-screen stream with latest detection frame |
 | `/settings` | Settings | API URL, poll interval, thresholds |

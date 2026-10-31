@@ -133,11 +133,11 @@ export default function Incidents() {
     <main className={styles.page}>
       <div className={styles.header}>
         <div>
-          <h1 className={styles.title}>Incidents</h1>
-          <span className={styles.subtitle}>Detected events with heuristic accident scores (0-1), not calibrated probabilities</span>
+          <h1 className={styles.title}>Alarm-frame Records</h1>
+          <span className={styles.subtitle}>One record per processed frame with a heuristic alarm; consecutive frames may be one episode, not unique or confirmed accidents. Scores (0-1) are not calibrated probabilities.</span>
         </div>
         <div className={styles.controls}>
-          <div className={styles.filterGroup} role="group" aria-label="Filter incidents">
+          <div className={styles.filterGroup} role="group" aria-label="Filter operator review status">
             {['all', 'active', 'resolved'].map((filterOption) => (
               <button
                 key={filterOption}
@@ -147,7 +147,7 @@ export default function Incidents() {
                   setPage(1);
                 }}
               >
-                {filterOption.charAt(0).toUpperCase() + filterOption.slice(1)}
+                {filterOption === 'all' ? 'All records' : filterOption === 'active' ? 'Review open' : 'Review closed'}
               </button>
             ))}
           </div>
@@ -251,7 +251,7 @@ export default function Incidents() {
             className={styles.actionBtn}
             onClick={handleExport}
             disabled={exporting}
-            title="Download all incidents matching the current filters as CSV"
+            title="Download all alarm-frame records matching the current filters as CSV"
           >
             {exporting ? 'Exporting…' : 'Export CSV'}
           </button>
@@ -264,18 +264,19 @@ export default function Incidents() {
           <span className={styles.count}>
             Showing page <strong>{page}</strong> of <strong>{totalPages}</strong> ·
             {' '}<strong>{incidents.length}</strong> on this page ·
-            {' '}<strong>{totalItems}</strong> total incidents
+            {' '}<strong>{totalItems}</strong> total alarm-frame records
           </span>
         )}
       </div>
 
-      <DataState loading={loading} error={error} onRetry={() => setRetryKey((v) => v + 1)} loadingMessage="Loading incidents...">
+      <p>Review open/closed tracks operator review only; it does not mean a physical incident or live alarm is active or cleared.</p>
+      <DataState loading={loading} error={error} onRetry={() => setRetryKey((v) => v + 1)} loadingMessage="Loading alarm-frame records...">
         <div className={styles.tableWrap}>
           <IncidentTable
             incidents={incidents}
             onRowClick={(incident) => setSelectedIncidentId(incident.id)}
             selectedIncidentId={selectedIncidentId}
-            emptyMessage="No incidents match current filters."
+            emptyMessage="No alarm-frame records match current filters."
           />
           <div className={styles.pagination}>
             <button
@@ -303,13 +304,13 @@ export default function Incidents() {
 
       <MetaInfoPanel meta={meta} title="Incidents list meta" />
       <section className={styles.detailSection}>
-        <h2 className={styles.detailTitle}>Selected Incident</h2>
+        <h2 className={styles.detailTitle}>Selected Alarm Frame</h2>
         <DataState
           loading={loadingDetail}
           error={detailError}
           isEmpty={!selectedIncidentId}
-          emptyMessage="Click an incident row to load detailed data."
-          loadingMessage="Loading incident detail..."
+          emptyMessage="Click an alarm-frame row to load detailed data."
+          loadingMessage="Loading alarm-frame detail..."
         >
           <IncidentDetailPanel incident={selectedIncident} onIncidentUpdated={handleIncidentUpdated} />
           <MetaInfoPanel meta={detailMeta} title="Incident detail meta" />

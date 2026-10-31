@@ -68,15 +68,15 @@ export default function IncidentDetailPanel({ incident, onIncidentUpdated }) {
 
   return (
     <section className={styles.panel}>
-      <h3 className={styles.title}>Incident Detail</h3>
+      <h3 className={styles.title}>Alarm-frame Detail</h3>
       <div className={styles.grid}>
         <span><strong>ID:</strong> {current.id}</span>
         <span><strong>Job:</strong> {current.jobId ?? '—'}</span>
         <span><strong>Camera:</strong> {current.cameraId}</span>
         <span><strong>Type:</strong> {current.type}</span>
-        <span><strong>Status:</strong> <StatusBadge status={isResolved ? 'resolved' : 'critical'} label={isResolved ? 'Resolved' : 'Active'} /></span>
-        <span><strong>Detected:</strong> {formatDateTime(current.detectedAt)}</span>
-        <span><strong>Resolved at:</strong> {current.resolvedAt ? formatDateTime(current.resolvedAt) : '—'}</span>
+        <span><strong>Review status:</strong> <StatusBadge status={isResolved ? 'resolved' : 'critical'} label={isResolved ? 'Review closed' : 'Review open'} /></span>
+        <span><strong>Alarm-frame time:</strong> {formatDateTime(current.detectedAt)}</span>
+        <span><strong>Review closed at:</strong> {current.resolvedAt ? formatDateTime(current.resolvedAt) : '—'}</span>
         <span><strong>Frame index:</strong> {current.frameIdx ?? '—'}</span>
         <span><strong>Processing elapsed time:</strong> {current.timestampSec ?? '—'}s (wall-clock since job start, not source-video time)</span>
         <span><strong>Heuristic accident score (0-1):</strong> {formatNumber(current.confidenceScore, 2)}</span>
@@ -87,6 +87,7 @@ export default function IncidentDetailPanel({ incident, onIncidentUpdated }) {
         <span><strong>Completed at:</strong> {formatDateTime(current.completedAt)}</span>
       </div>
       <p>Accident scores are smoothed weighted heuristics, not calibrated probabilities or YOLO object-detection confidence.</p>
+      <p>This record represents one heuristic alarm frame, not a confirmed accident. Consecutive records may be one episode. Review open/closed is an operator workflow, not evidence that a physical incident or live alarm is active or cleared.</p>
       <p className={styles.box}><strong>Bounding box:</strong> {boxText(current.boundingBox)}</p>
       {current.streamUrl && (
         <a href={current.streamUrl} target="_blank" rel="noreferrer" className={styles.link}>
@@ -126,7 +127,7 @@ export default function IncidentDetailPanel({ incident, onIncidentUpdated }) {
             disabled={saving}
             onClick={() => submit(isResolved ? 'active' : 'resolved')}
           >
-            {saving ? 'Saving…' : isResolved ? 'Reopen incident' : 'Mark resolved'}
+            {saving ? 'Saving…' : isResolved ? 'Reopen review' : 'Close review'}
           </button>
         </div>
         {actionError && <p className={styles.error} role="alert">{actionError}</p>}
