@@ -1,6 +1,7 @@
 """Measure genuine inference without exposing detections, embeddings or raw logs."""
 import functools
 import json
+import os
 from pathlib import Path
 import uvicorn
 from app import main
@@ -37,5 +38,16 @@ def measured_job(*args, **kwargs):
 
 
 main.run_detection_job = measured_job
-uvicorn.run(main.app, host="0.0.0.0", port=8000, workers=1,
-            access_log=False, proxy_headers=True, forwarded_allow_ips="172.29.68.3")
+cleanup_admission_fault = None
+if os.environ.get("SYNTHETIC_ADMISSION_FAULT") == "1":
+    from admission_failure_fault import install_admission_failure_fault
+    cleanup_admission_fault = install_admission_failure_fault(
+        main.job_store, main.DetectionQueue, "/data/jobs.sqlite3",
+        "/tmp/synthetic-admission-fault",
+    )
+try:
+    uvicorn.run(main.app, host="0.0.0.0", port=8000, workers=1,
+                access_log=False, proxy_headers=True, forwarded_allow_ips="172.29.68.3")
+finally:
+    if cleanup_admission_fault is not None:
+        cleanup_admission_fault()
