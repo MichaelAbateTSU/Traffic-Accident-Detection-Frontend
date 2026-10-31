@@ -33,9 +33,14 @@ test('list arriving after key request release stays blocked through receipt cons
     await assert.rejects(fault.releaseLists(), assert.AssertionError);
     fault.observed({ type: 'receipt-consumed', key: 'key', jobId: 'original', status: 'complete' });
     await assert.rejects(fault.releaseLists(), assert.AssertionError);
-    fault.observed({ type: 'driver-full-read', jobId: 'original' });
+    assert.throws(()=>fault.observed({ type: 'driver-full-read', jobId: 'original' }), assert.AssertionError);
     assert.equal(fault.fullRead, false);
     fault.observed({ type: 'application-full-read', jobId: 'original' });
+    assert.equal(fault.fullRead, false);
+    await assert.rejects(fault.releaseLists(), assert.AssertionError);
+    fault.observed({ type: 'network-full-read', jobId: 'original' });
+    await assert.rejects(fault.releaseLists(), assert.AssertionError);
+    fault.confirmedRenderedResult();
     await fault.releaseLists();
     assert.equal(calls.at(-1).params.requestId, 'list-late');
   } finally {
@@ -64,5 +69,21 @@ test('full read or consumption before verified delivery cannot establish attribu
     await fault.paused(lookup);
     await fault.releaseRequest();
     await assert.rejects(fault.paused({ ...lookup, requestId: 'unrelated', responseStatusCode: 200 }), assert.AssertionError);
+  } finally { await fault.cleanup(); }
+});
+
+test('application binding without a real network GET cannot open lists or confirm rendered results', async () => {
+  const { fault } = fixture();
+  try {
+    await fault.paused(lookup);
+    await fault.releaseRequest();
+    await fault.paused({ ...lookup, responseStatusCode: 200 });
+    await fault.deliverResponse();
+    fault.observed({ type: 'receipt-consumed', key: 'key', jobId: 'original', status: 'complete' });
+    fault.observed({ type: 'application-full-read', jobId: 'original' });
+    assert.equal(fault.fullRead, false);
+    assert.throws(()=>fault.confirmedRenderedResult(), assert.AssertionError);
+    await assert.rejects(fault.releaseLists(), assert.AssertionError);
+    assert.throws(()=>fault.observed({ type: 'driver-full-read', jobId: 'original' }), assert.AssertionError);
   } finally { await fault.cleanup(); }
 });

@@ -6,6 +6,7 @@ export function createReceiptAttribution(send, api, key, jobId, requireFullRead,
   const heldLists = new Set();
   let lookupId, requestReleased = false, responseVerified = false;
   let responseDelivered = false, consumed = false, fullRead = false;
+  let applicationRead = false, rendered = false;
   let expired = false, transportError;
   let activeSnapshotHeld = false, responsePaused = false;
   const timer = setTimeout(() => {
@@ -62,7 +63,7 @@ export function createReceiptAttribution(send, api, key, jobId, requireFullRead,
         return true;
       }
       const url = new URL(event.request.url);
-      if (requireFullRead && !fullRead && url.origin === api &&
+      if (requireFullRead && !rendered && url.origin === api &&
           url.pathname === '/jobs' && event.request.method === 'GET') {
         if (event.responseStatusCode == null) {
           await send('Fetch.continueRequest', { requestId: event.requestId, interceptResponse: true });
@@ -107,13 +108,27 @@ export function createReceiptAttribution(send, api, key, jobId, requireFullRead,
         consumed = true;
       } else if (event.type === 'application-full-read' && event.jobId === jobId) {
         if (requireFullRead) assert.equal(consumed, true, 'Application full read preceded receipt consumption');
-        if (consumed) fullRead = true;
+        if (consumed) applicationRead = true;
+      } else if (event.type === 'driver-full-read' && event.jobId === jobId && requireFullRead && !fullRead) {
+        assert.fail('Test driver cannot request the full job during receipt attribution');
+      } else if (event.type === 'network-full-read' && event.jobId === jobId) {
+        if (requireFullRead) {
+          assert.equal(consumed && applicationRead, true,
+            'Actual job network request must follow consumed receipt and application read');
+        }
+        if (consumed && applicationRead) fullRead = true;
       }
+    },
+    confirmedRenderedResult() {
+      healthy();
+      assert.equal(consumed && fullRead, true);
+      rendered = true;
     },
     async releaseLists() {
       healthy();
       assert.equal(consumed, true);
-      if (requireFullRead) assert.equal(fullRead, true);
+      if (requireFullRead) assert.equal(fullRead && rendered, true,
+        'Actual network read and mounted terminal metrics are required before opening lists');
       await cleanup();
     },
     cleanup,

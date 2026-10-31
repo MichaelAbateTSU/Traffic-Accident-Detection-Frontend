@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
 
-test('actual page observer records consumed receipt before application read, excludes driver fetch', async () => {
+test('actual page observer records consumption before application read and distinguishes driver fetch', async () => {
   const file = readFileSync(new URL('./keyed_browser.mjs', import.meta.url), 'utf8');
   const start = file.indexOf("await send('Page.addScriptToEvaluateOnNewDocument', { source:");
   const end = file.indexOf("await send('Fetch.enable'", start);
@@ -21,7 +21,11 @@ test('actual page observer records consumed receipt before application read, exc
       return { status: 200, json: async()=>({ job_id: 'original', status: 'complete' }) };
     },
   };
-  vm.runInNewContext(script, { window, URL: { createObjectURL() {}, revokeObjectURL() {} },
+  class TestURL extends URL {
+    static createObjectURL() {}
+    static revokeObjectURL() {}
+  }
+  vm.runInNewContext(script, { window, URL: TestURL, location: { href: 'https://frontend.integration.test:8454/' },
     Headers, WeakMap, Map, JSON });
   const response = await window.fetch('https://api.integration.test:8453/detection-submissions/v1',
     { headers: { 'Idempotency-Key': 'key' } });
@@ -33,6 +37,7 @@ test('actual page observer records consumed receipt before application read, exc
   assert.equal(events[0].jobId, 'original');
   const eventCount = events.length;
   await window.testDriverFetch('https://api.integration.test:8453/jobs/original');
-  assert.equal(events.length, eventCount);
+  assert.equal(events.length, eventCount + 1);
+  assert.equal(events.at(-1).type, 'driver-full-read');
   assert.equal(nativeCalls.length, 3);
 });

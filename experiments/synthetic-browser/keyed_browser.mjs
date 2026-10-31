@@ -124,6 +124,11 @@ try {
         artifactRequests.set(r.url, headers.authorization === `Bearer ${token}`);
       }
       if (r.url.startsWith(`${api}/jobs/`) && r.method === 'GET' && !r.url.endsWith('/status')) {
+        try {
+          attribution?.observed({ type: 'network-full-read', jobId: decodeURIComponent(new URL(r.url).pathname.slice('/jobs/'.length)) });
+        } catch (error) {
+          interceptionFailures.push(error.name);
+        }
         fullJobRequests.set(r.url, (fullJobRequests.get(r.url) || 0) + 1);
       }
       if (r.url === `${api}/detection-submissions/v1` && r.method === 'POST') {
@@ -229,7 +234,16 @@ try {
   await send('Runtime.addBinding', { name: 'receiptAttributionEvent' });
   await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
     const original=window.fetch;
-    window.testDriverFetch=original.bind(window);
+    const fullJobIdentity=input=> {
+      const url=new URL(String(input),location.href);
+      return url.origin===${JSON.stringify(api)}&&/^\\/jobs\\/[^/]+$/.test(url.pathname)
+        ? decodeURIComponent(url.pathname.slice('/jobs/'.length)):null;
+    };
+    window.testDriverFetch=function(input,options) {
+      const jobId=fullJobIdentity(input);
+      if(jobId)window.receiptAttributionEvent(JSON.stringify({type:'driver-full-read',jobId}));
+      return original.apply(this,arguments);
+    };
     const blobs=new WeakMap();
     window.currentObjectUrlSources=new Map();
     const create=URL.createObjectURL.bind(URL),revoke=URL.revokeObjectURL.bind(URL);
@@ -352,6 +366,16 @@ try {
       assert.equal(attribution.consumed, true);
       if (withoutSavedId) assert.equal(attribution.fullRead, true);
       await wait(`${cardExpression(originalId)}?.textContent.includes("Status: done")`, 5000);
+      if (withoutSavedId) {
+        // The test driver must not fetch /jobs here: use the original durable
+        // snapshot solely as an expected-value oracle for the actual mounted UI.
+        const expected = container(`import sqlite3,json; c=sqlite3.connect('/data/jobs.sqlite3'); print(c.execute('SELECT payload FROM jobs WHERE id=?',(${JSON.stringify(originalId)},)).fetchone()[0])`);
+        await wait(`${cardExpression(originalId)}?.textContent.includes("Frames processed: 12") &&
+          ${cardExpression(originalId)}?.textContent.includes(${JSON.stringify(`Peak heuristic accident score (0-1): ${expected.peak_confidence.toFixed(2)}`)}) &&
+          ${cardExpression(originalId)}?.textContent.includes("Alarm frames (0)") &&
+          ${cardExpression(originalId)}?.textContent.includes("No alarm-frame records returned.")`, 5000);
+        attribution.confirmedRenderedResult();
+      }
       await evaluate(`(() => {
         window.terminalRegressions=[];
         const inspect=()=> {
