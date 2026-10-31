@@ -37,10 +37,17 @@ jobs:
         run: |
           test "$(git -C backend rev-parse HEAD)" = 5a1bfc38e207913c66eb6120e986147a66410424
           test "$(git -C frontend rev-parse HEAD)" = f8461ada80f7ee10d9b5169364c10e9aa9fddef7
+          command -v python3
+          boundary_env="$(mktemp -d "$RUNNER_TEMP/tad-boundary-python.XXXXXX")"
+          trap 'rm -rf -- "$boundary_env"' EXIT
+          python3 experiments/synthetic-browser/prepare_boundary_python.py "$GITHUB_WORKSPACE/backend" "$boundary_env"
+          export TAD_BACKEND_CONTRACT_ROOT="$GITHUB_WORKSPACE/backend"
+          export TAD_BOUNDARY_PYTHON="$boundary_env/bin/python"
           python -m unittest discover -s experiments/synthetic-browser -p '*_test.py'
           node --test experiments/synthetic-browser/*_test.mjs
           cd frontend
           npm ci --quiet
+          node ../experiments/synthetic-browser/required_boundary.mjs "$GITHUB_WORKSPACE/frontend"
           npm test
           VITE_API_BASE_URL=https://api.integration.test:8453 npm run build:render
           cd ..
