@@ -102,7 +102,7 @@ function normalizeCameraStatus(value) {
   if (['online', 'warning', 'offline'].includes(normalized)) return normalized;
   if (['active', 'healthy'].includes(normalized)) return 'online';
   if (['degraded', 'warn'].includes(normalized)) return 'warning';
-  return 'offline';
+  return 'unknown';
 }
 
 function createApiError(message, { status, requestId, details, code } = {}) {

@@ -59,13 +59,14 @@ export default function JobStatusCard({ job }) {
         <span><strong>Frames received:</strong> {frames.length}</span>
         <span><strong>Max frames:</strong> {job.maxFrames ?? '—'}</span>
         <span><strong>Save frames:</strong> {job.saveFrames == null ? '—' : job.saveFrames ? 'Yes' : 'No'}</span>
-        <span className={accidentClassName}><strong>Accident detected:</strong> {accidentLabel}</span>
+        <span className={accidentClassName}><strong>Heuristic alarm reported:</strong> {accidentLabel}</span>
         <span><strong>Peak heuristic accident score (0-1):</strong> {formatNumber(job.peakConfidence, 2)}</span>
-        <span><strong>Events:</strong> {eventsCount}</span>
+        <span><strong>Alarm-frame records:</strong> {eventsCount}</span>
         <span><strong>Created:</strong> {formatDateTime(job.createdAt)}</span>
         <span><strong>Completed:</strong> {formatDateTime(job.completedAt)}</span>
       </div>
       <p>Accident scores are smoothed weighted heuristics, not calibrated probabilities or YOLO object-detection confidence.</p>
+      <p>One record is emitted for each processed frame with an active heuristic alarm. Consecutive records may belong to one alarm episode; they are not unique or confirmed accidents.</p>
       {job.streamUrl && (
         <a href={job.streamUrl} target="_blank" rel="noreferrer" className={styles.link}>
           Open stream
@@ -79,15 +80,15 @@ export default function JobStatusCard({ job }) {
           <div className={styles.emptyState}>No frame images returned yet.</div>
         )}
       </section>
-      <section className={styles.eventsSection} aria-label="Job events">
-        <div className={styles.sectionTitle}>Events ({eventsCount})</div>
+      <section className={styles.eventsSection} aria-label="Job alarm-frame records">
+        <div className={styles.sectionTitle}>Alarm frames ({eventsCount})</div>
         {eventsCount > 0 ? (
           <div className={styles.eventList}>
             {job.events.map((eventItem, index) => (
               <div key={`${eventItem.incidentId ?? 'event'}-${eventItem.frameIdx ?? index}`} className={styles.eventCard}>
                 <span><strong>Frame:</strong> {eventItem.frameIdx ?? '—'}</span>
                 <span><strong>Processing elapsed time:</strong> {eventItem.timestampSec ?? '—'}s (wall-clock since job start, not source-video time)</span>
-                <span><strong>Detected:</strong> {eventItem.accidentDetected == null ? '—' : eventItem.accidentDetected ? 'Yes' : 'No'}</span>
+                <span><strong>Heuristic alarm:</strong> {eventItem.accidentDetected == null ? '—' : eventItem.accidentDetected ? 'Yes' : 'No'}</span>
                 <span><strong>Heuristic accident score (0-1):</strong> {formatNumber(eventItem.confidenceScore, 2)}</span>
                 <span><strong>Raw heuristic score (0-1):</strong> {formatNumber(eventItem.rawScore, 2)}</span>
                 <span><strong>Bounding box:</strong> {formatBoundingBox(eventItem.boundingBox)}</span>
@@ -107,7 +108,7 @@ export default function JobStatusCard({ job }) {
             ))}
           </div>
         ) : (
-          <div className={styles.emptyState}>No events returned.</div>
+          <div className={styles.emptyState}>No alarm-frame records returned.</div>
         )}
       </section>
       {job.message && <div className={styles.message}>{job.message}</div>}

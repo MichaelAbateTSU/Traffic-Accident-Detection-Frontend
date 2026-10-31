@@ -146,7 +146,7 @@ export default function Dashboard() {
     loading,
     error,
     reload,
-  } = useDashboardData({ incidentsPageSize: 5, incidentsStatus: 'active' });
+  } = useDashboardData({ incidentsPageSize: 5, incidentsStatus: 'all' });
   useEffect(() => {
     monitoredJobsRef.current = monitoredJobs;
   }, [monitoredJobs]);
@@ -652,7 +652,7 @@ export default function Dashboard() {
     <main className={styles.page}>
       <div className={styles.header}>
         <h1 className={styles.title}>Operations Dashboard</h1>
-        <span className={styles.subtitle}>Traffic incident monitoring and heuristic accident scores (0-1), not calibrated probabilities</span>
+        <span className={styles.subtitle}>Alarm-frame review and heuristic accident scores (0-1), not calibrated probabilities or confirmed accidents</span>
       </div>
 
       {health && (
@@ -667,7 +667,7 @@ export default function Dashboard() {
       {activeIncidents.length > 0 && (
         <AlertBanner
           type="danger"
-          message={`${activeIncidents.length} active incident${activeIncidents.length > 1 ? 's' : ''} detected`}
+          message={`${activeIncidents.length} alarm-frame record${activeIncidents.length > 1 ? 's' : ''} with active record status on this page`}
           detail={activeIncidents.map((incident) => `${incident.cameraId} — ${incident.type}`).join(' · ')}
         />
       )}
@@ -682,20 +682,20 @@ export default function Dashboard() {
       >
         <section className={styles.statsGrid} aria-label="Statistics">
           <StatCard
-            label="Active Cameras"
+            label="Job Sources Pending/Running"
             value={stats ? `${stats.activeCameras}/${stats.totalCameras}` : '—'}
             icon="CAM"
-            trend={stats?.activeCameras === stats?.totalCameras ? 'All online' : 'Degraded'}
-            variant={stats?.activeCameras === stats?.totalCameras ? 'good' : 'warn'}
-            description="Cameras currently online"
+            trend={stats?.totalCameras > 0 ? 'Job-derived counts' : 'No retained job sources'}
+            variant="neutral"
+            description="Distinct sources with any retained pending/running job / all retained job sources, even if a newer job completed; not cameras online or raw-stream availability."
           />
           <StatCard
-            label="Incidents Today"
+            label="Alarm Frames Today"
             value={stats?.incidentsToday ?? '—'}
             icon="INC"
-            trend={(stats?.incidentsToday ?? 0) > 0 ? 'Needs attention' : 'Normal'}
+            trend={(stats?.incidentsToday ?? 0) > 0 ? 'Review records' : 'No alarm frames recorded'}
             variant={stats?.incidentsToday > 0 ? 'danger' : 'good'}
-            description="Accidents or events detected"
+            description="One record per frame with a heuristic alarm; consecutive records may be one episode, not unique or confirmed accidents."
           />
           <StatCard
             label="Detection Status"
@@ -709,19 +709,19 @@ export default function Dashboard() {
             description="YOLO inference service state"
           />
           <StatCard
-            label="System Uptime"
+            label="Legacy Nonfailed-job Ratio"
             value={uptimePercent == null ? '—' : formatPercent(uptimePercent / 100, 2)}
-            icon="UPT"
+            icon="JOB"
             variant="good"
             progressPercent={uptimePercent ?? 0}
-            description="Measured over the last 30 days"
+            description="Last 30 days: nonfailed jobs among at most 10,000 listed jobs (including queued/running), divided by all jobs in the window. Larger restored histories can undercount the numerator. Backend returns 100% for an empty window; not measured system uptime."
           />
         </section>
       </DataState>
 
       <SectionCard
-        title="Recent Incidents"
-        description={`Showing latest ${incidents.length} of ${totalRecentIncidents} active incidents`}
+        title="Recent Alarm Frames"
+        description={`Showing latest ${incidents.length} of ${totalRecentIncidents} retained alarm-frame records across all statuses. Status is job-derived by default or manually overridden; it does not confirm review, accident resolution or a live alarm.`}
         action={<Link to="/incidents" className={styles.viewAll}>View all</Link>}
       >
         <IncidentTable
@@ -729,7 +729,7 @@ export default function Dashboard() {
           compact
           onRowClick={setSelectedIncident}
           selectedIncidentId={selectedIncident?.id ?? null}
-          emptyMessage="No incidents in this dashboard window."
+          emptyMessage="No retained alarm-frame records in this dashboard window."
         />
         {selectedIncident && (
           <div className={styles.incidentDetailWrap}>
@@ -898,8 +898,8 @@ export default function Dashboard() {
                   {failedJobsCount > 0
                     ? 'Detection results are incomplete because some detection jobs failed.'
                     : accidentJobsCount === 0
-                    ? '0 accidents detected.'
-                    : `${accidentJobsCount} detection job${accidentJobsCount > 1 ? 's' : ''} reported accident events.`}
+                    ? 'No heuristic alarm frames reported; this does not establish that the sources were accident-free.'
+                    : `${accidentJobsCount} detection job${accidentJobsCount > 1 ? 's' : ''} reported heuristic alarm frames, not confirmed accidents.`}
                 </span>
               </>
             )}
@@ -928,7 +928,7 @@ export default function Dashboard() {
 
         {latestCompletedJob && (
           <p className={styles.sectionMeta}>
-            Latest completed job (<strong>{latestCompletedJob.id}</strong>) returned <strong>{latestCompletedEventCount}</strong> events.
+            Latest completed job (<strong>{latestCompletedJob.id}</strong>) returned <strong>{latestCompletedEventCount}</strong> alarm-frame records.
             Peak heuristic accident score (0-1): <strong>{formatNumber(latestCompletedJob.peakConfidence, 2)}</strong>.
           </p>
         )}
@@ -960,8 +960,8 @@ export default function Dashboard() {
       </SectionCard>
 
       <SectionCard
-        title="Live Cameras"
-        description={`Top ${previewCameras.length} cameras from the current dashboard health snapshot`}
+        title="Job Sources"
+        description={`Top ${previewCameras.length} sources from retained job history; raw playback health is not measured.`}
         action={<Link to="/live" className={styles.viewAll}>Open full feed</Link>}
       >
         <div className={styles.cameraGrid}>

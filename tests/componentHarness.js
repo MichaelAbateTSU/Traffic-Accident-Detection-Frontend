@@ -25,6 +25,7 @@ export async function componentHarness(path, dependencies = {}, globals = {}, en
   const { code } = await transformWithEsbuild(source, path, { jsx: 'automatic' });
   const slots = [];
   const timers = new Map();
+  const timeouts = new Map();
   const effects = [];
   let cursor = 0;
   let dirty = false;
@@ -41,6 +42,12 @@ export async function componentHarness(path, dependencies = {}, globals = {}, en
       return id;
     },
     clearInterval(id) { timers.delete(id); },
+    setTimeout(callback, delay) {
+      const id = nextTimer++;
+      timeouts.set(id, { callback, delay });
+      return id;
+    },
+    clearTimeout(id) { timeouts.delete(id); },
     ...globals,
   });
   const equalDeps = (a, b) => a && b && a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
@@ -98,7 +105,10 @@ export async function componentHarness(path, dependencies = {}, globals = {}, en
     context,
     initializeImportMeta(meta) { meta.env = env; },
   });
-  await module.link((specifier) => {
+  await module.link(async (specifier) => {
+    if (specifier.endsWith('/boundedRefresh.js')) {
+      return new SourceTextModule(await readFile(new URL('../src/utils/boundedRefresh.js', import.meta.url), 'utf8'), { context });
+    }
     const exports = exportsBySpecifier[specifier] ?? {
       default: specifier.endsWith('.css') ? {} : specifier.split('/').at(-1).replace('.jsx', ''),
     };
@@ -126,6 +136,7 @@ export async function componentHarness(path, dependencies = {}, globals = {}, en
   return {
     render,
     timers,
+    timeouts,
     get elements() { return elements; },
     async flush() {
       await new Promise((resolve) => setImmediate(resolve));
