@@ -153,7 +153,8 @@ for (const [label, failAt, accepted] of [
     await dashboard.submit();
     const jobs = dashboard.render().filter((node) => node.type === 'JobStatusCard');
     assert.equal(jobs.length, accepted);
-    assert.equal(dashboard.refreshedIds.length, accepted);
+    await dashboard.poll();
+    assert.equal(new Set(dashboard.refreshedIds).size, accepted);
     assert.equal(dashboard.timers.size, accepted ? 1 : 0);
     assert.equal(dashboard.reloads, accepted ? 1 : 0);
     assert.ok(dashboard.payloads.every((payload) => payload.save_frames === false));
@@ -172,8 +173,9 @@ for (const [label, failAt, accepted] of [
         assert.match(dashboard.persisted.at(-1).warning, /2 of 9/);
       }
     }
+    const previousReads = dashboard.refreshedIds.length;
     await dashboard.poll();
-    assert.equal(dashboard.refreshedIds.length, accepted * 2);
+    assert.equal(dashboard.refreshedIds.length, previousReads + accepted);
     assert.equal(warnings().length, failAt === Infinity ? 0 : 1);
 
     const previousPayloads = dashboard.payloads.length;

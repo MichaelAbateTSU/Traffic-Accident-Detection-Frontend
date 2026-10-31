@@ -242,9 +242,13 @@ export default function Dashboard() {
   function persistMonitor(ids, warning = null) {
     try {
       saveJobMonitor(ids, warning);
-      setMonitorStorageError(null);
+      if (monitorMountedRef.current) setMonitorStorageError(null);
     } catch (error) {
-      setMonitorStorageError(`Cannot save job monitor for reload recovery: ${error.message}. Active jobs will still be recovered from the backend.`);
+      if (monitorMountedRef.current) {
+        setMonitorStorageError(`Cannot save job monitor for reload recovery: ${error.message}. Active jobs will still be recovered from the backend.`);
+      } else {
+        console.error('Cannot save accepted job monitor after navigation:', error);
+      }
     }
   }
 
@@ -297,15 +301,24 @@ export default function Dashboard() {
         if (!id) {
           throw new Error('Job started but no job id was returned by the backend.');
         }
-        queuedResponses.push(
-          normalizeMonitorJob({
-            ...item,
-            id,
-            maxFrames: item.maxFrames ?? frameCount,
-            frames: mergeFrameImages([], item?.frames ?? []),
-          }),
-        );
+        const acceptedJob = normalizeMonitorJob({
+          ...item,
+          id,
+          maxFrames: item.maxFrames ?? frameCount,
+          frames: mergeFrameImages([], item?.frames ?? []),
+        });
+        queuedResponses.push(acceptedJob);
         persistMonitor(queuedResponses.map((job) => job.id));
+        // Keep known acceptance for recovery, but do not continue a batch after navigation.
+        if (!monitorMountedRef.current) break;
+        monitoredJobsRef.current = [...monitoredJobsRef.current, acceptedJob];
+        setMonitoredJobs(monitoredJobsRef.current);
+        if (monitoredJobsRef.current.some((jobItem) => !isTerminalStatus(jobItem.status))) {
+          if (!pollingTimerRef.current) {
+            pollingTimerRef.current = setInterval(refreshPendingJobs, JOB_POLL_INTERVAL_MS);
+          }
+          refreshPendingJobs();
+        }
       }
 
       if (!queuedResponses.length) {
@@ -316,22 +329,11 @@ export default function Dashboard() {
       const warning = queuedResponses.length
         ? `${queuedResponses.length} of ${sources.length} jobs started; submission stopped: ${err.message}`
         : err.message;
-      setJobSubmissionError(warning);
+      if (monitorMountedRef.current) setJobSubmissionError(warning);
       persistMonitor(queuedResponses.map((job) => job.id), warning);
     } finally {
-      if (queuedResponses.length) {
-        monitoredJobsRef.current = queuedResponses;
-        setMonitoredJobs(queuedResponses);
-        if (monitorMountedRef.current && queuedResponses.some((jobItem) => !isTerminalStatus(jobItem.status))) {
-          pollingTimerRef.current = setInterval(() => {
-            refreshPendingJobs();
-          }, JOB_POLL_INTERVAL_MS);
-          refreshPendingJobs();
-        }
-
-        if (monitorMountedRef.current) reload();
-      }
-      setStartingJob(false);
+      if (queuedResponses.length && monitorMountedRef.current) reload();
+      if (monitorMountedRef.current) setStartingJob(false);
       startingJobRef.current = false;
       endJobSubmission();
     }

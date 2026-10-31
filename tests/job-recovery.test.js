@@ -82,25 +82,29 @@ test('job errors remain visible, 404 is terminal, and listing failures reject un
   await assert.rejects(failing.api.recoverJobMonitor({}), /Unauthorized/);
 });
 
-async function dashboardHarness(recoverJobMonitor, getMonitoredJob = async (id) => ({ item: { id, status: 'running' } })) {
+async function dashboardHarness(recoverJobMonitor, getMonitoredJob = async (id) => ({ item: { id, status: 'running' } }), options = {}) {
   const submissions = [];
   const persisted = [];
   const harness = await componentHarness('../src/pages/Dashboard/Dashboard.jsx', {
     'react-router-dom': { Link: 'Link' },
-    '../../constants/cameras.js': { FIXED_CAMERA_STREAM_URLS: ['stream-1', 'stream-2'] },
+    '../../constants/cameras.js': { FIXED_CAMERA_STREAM_URLS: options.sources ?? ['stream-1', 'stream-2'] },
     '../../services/api.js': {
       parseMaxFrames: Number,
-      startDetectionJob: async (payload) => { submissions.push(payload); return { item: { id: 'new', status: 'pending' } }; },
+      startDetectionJob: async (payload) => {
+        submissions.push(payload);
+        return options.startDetectionJob ? options.startDetectionJob(payload) : { item: { id: 'new', status: 'pending' } };
+      },
     },
     '../../services/jobMonitor.js': {
-      beginJobSubmission() {}, endJobSubmission() {},
+      beginJobSubmission: options.beginJobSubmission ?? (() => {}),
+      endJobSubmission: options.endJobSubmission ?? (() => {}),
       recoverJobMonitor,
       getMonitoredJob,
       saveJobMonitor: (ids, warning) => persisted.push({ ids, warning }),
     },
     '../../utils/formatters.js': { formatDateTime: String, formatNumber: String, formatPercent: String },
     '../../hooks/useDashboardData.js': {
-      useDashboardData: () => ({ stats: null, incidents: [], cameras: [], jobs: [], reload() {} }),
+      useDashboardData: () => ({ stats: null, incidents: [], cameras: [], jobs: [], reload: options.reload ?? (() => {}) }),
     },
   });
   return { harness, submissions, persisted };
@@ -386,4 +390,119 @@ test('job cards distinguish transient monitoring errors from backend job failure
   assert.equal(alert.props.children, 'Reading accepted job timed out.');
   harness.render({ job: { id: 'accepted', status: 'complete', monitorError: null } });
   assert.ok(!harness.elements.some((node) => node.props.role === 'alert'));
+});
+
+test('an accepted job polls while the next POST never settles; unmount cancels GETs but does not retry the POST', async () => {
+  const pendingPost = deferred();
+  const lateGet = deferred();
+  let reads = 0;
+  let signal;
+  let submissionFinished = 0;
+  const { api, clock } = await monitorHarness({
+    getJob(id, request) {
+      reads++;
+      if (reads === 1) return Promise.resolve({ item: { id, status: 'running', framesProcessed: 12 } });
+      signal = request.signal;
+      return lateGet.promise;
+    },
+  });
+  const { harness, submissions, persisted } = await dashboardHarness(async () => ({ jobs: [] }), api.getMonitoredJob, {
+    startDetectionJob: (payload) => payload.stream_url === 'stream-1'
+      ? Promise.resolve({ item: { id: 'accepted-first', status: 'pending' } })
+      : pendingPost.promise,
+    endJobSubmission: () => { submissionFinished++; },
+  });
+  harness.render();
+  await harness.flush();
+  const batch = harness.elements.find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
+  await harness.flush();
+  assert.equal(submissions.length, 2);
+  assert.equal(persisted.at(-1).ids[0], 'accepted-first');
+  const job = harness.elements.find((node) => node.type === 'JobStatusCard').props.job;
+  assert.equal(job.status, 'running');
+  assert.equal(job.framesProcessed, 12);
+  assert.equal(harness.timers.size, 1);
+  for (const tick of harness.timers.values()) tick();
+  await harness.flush();
+  assert.equal(reads, 2, 'the accepted job continues polling during the pending POST');
+  await harness.elements.find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
+  await harness.flush();
+  assert.equal(submissions.length, 2);
+  assert.equal(submissionFinished, 0, 'the unresolved POST remains honestly in progress');
+  const before = JSON.stringify(harness.elements);
+  harness.unmount();
+  await harness.flush();
+  assert.equal(signal.aborted, true);
+  assert.equal(clock.timers.size, 0);
+  assert.equal(harness.timers.size, 0);
+  lateGet.resolve({ item: { id: 'accepted-first', status: 'complete' } });
+  await harness.flush();
+  assert.equal(JSON.stringify(harness.elements), before);
+  assert.equal(submissions.length, 2);
+  assert.equal(submissionFinished, 0);
+  // Resolve only for test cleanup: this was never required to display or poll the first job.
+  pendingPost.resolve({ item: { id: 'accepted-late', status: 'pending' } });
+  await batch;
+  await harness.flush();
+  assert.equal(persisted.at(-1).ids.join(','), 'accepted-first,accepted-late');
+  assert.equal(harness.timers.size, 0);
+  assert.equal(submissionFinished, 1);
+  assert.equal(JSON.stringify(harness.elements), before);
+});
+
+test('serial acceptance preserves progressive GET results and completed jobs do not permit starts during an unresolved POST', async () => {
+  const pendingPost = deferred();
+  let call = 0;
+  const { harness, submissions } = await dashboardHarness(async () => ({ jobs: [] }), async (id) => ({
+    item: { id, status: 'complete', framesProcessed: 120, frames: [{ frameIndex: 1, capture: `${id}.jpg` }] },
+  }), {
+    sources: ['stream-1', 'stream-2', 'stream-3'],
+    startDetectionJob: async () => ++call === 3 ? pendingPost.promise : { item: { id: `accepted-${call}`, status: 'pending' } },
+  });
+  harness.render();
+  await harness.flush();
+  const batch = harness.elements.find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
+  await harness.flush();
+  for (const tick of harness.timers.values()) tick();
+  await harness.flush();
+  const jobs = () => harness.elements.filter((node) => node.type === 'JobStatusCard').map((node) => node.props.job);
+  assert.equal(submissions.length, 3);
+  assert.equal(jobs().length, 2);
+  assert.ok(jobs().every((job) => job.status === 'complete' && job.framesProcessed === 120));
+  assert.equal(harness.timers.size, 0);
+  await harness.elements.find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
+  assert.equal(submissions.length, 3, 'terminal accepted jobs do not override the pending POST lock');
+  pendingPost.reject(new Error('Later submission unavailable'));
+  await batch;
+  await harness.flush();
+  assert.ok(jobs().every((job) => job.status === 'complete' && job.frames.length === 1));
+  assert.match(JSON.stringify(harness.elements), /2 of 3 jobs started.*Later submission unavailable/);
+  assert.equal(harness.timers.size, 0);
+  harness.unmount();
+});
+
+test('late confirmed acceptance after navigation is persisted without issuing remaining serial POSTs', async () => {
+  const late = deferred();
+  let reloads = 0;
+  const { harness, submissions, persisted } = await dashboardHarness(async () => ({ jobs: [] }), async () => {
+    throw new Error('Unmounted accepted jobs must not start polling');
+  }, {
+    sources: ['stream-1', 'stream-2', 'stream-3'],
+    startDetectionJob: () => late.promise,
+    reload: () => { reloads++; },
+  });
+  harness.render();
+  await harness.flush();
+  const batch = harness.elements.find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
+  await harness.flush();
+  harness.unmount();
+  const before = JSON.stringify(harness.elements);
+  late.resolve({ item: { id: 'late-accepted', status: 'pending' } });
+  await batch;
+  await harness.flush();
+  assert.equal(submissions.length, 1);
+  assert.equal(persisted.at(-1).ids[0], 'late-accepted');
+  assert.equal(harness.timers.size, 0);
+  assert.equal(reloads, 0);
+  assert.equal(JSON.stringify(harness.elements), before);
 });
