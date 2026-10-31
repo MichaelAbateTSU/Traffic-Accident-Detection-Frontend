@@ -1,6 +1,17 @@
 import { readFile } from 'node:fs/promises';
 import { createContext, SourceTextModule, SyntheticModule } from 'node:vm';
 import { transformWithEsbuild } from 'vite';
+import { webcrypto } from 'node:crypto';
+import * as journal from '../src/services/submissionJournal.js';
+
+export function journalDependencies({ storage = new Map(), backend = 'https://backend.example' } = {}) {
+  const api = journal.createSubmissionJournal({
+    storage: () => ({ getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) }),
+    cryptography: () => webcrypto,
+    backend,
+  });
+  return { ...journal, createSubmissionJournal: () => api };
+}
 
 export function deferred() {
   let resolve;
@@ -70,6 +81,7 @@ export async function componentHarness(path, dependencies = {}, globals = {}, en
   const exportsBySpecifier = {
     react: hooks,
     'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'Fragment' },
+    '../../services/submissionJournal.js': journalDependencies(),
     ...dependencies,
   };
   const module = new SourceTextModule(code, {

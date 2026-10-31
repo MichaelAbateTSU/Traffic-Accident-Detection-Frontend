@@ -1,4 +1,5 @@
 import { API_CONFIGURATION, getJob, getJobs } from './api.js';
+import { createSubmissionJournal, submissionWarnings, validateRecoveryBackend } from './submissionJournal.js';
 
 const storageKey = `tad_monitor:${API_CONFIGURATION.baseUrl}`;
 let currentSubmission = null;
@@ -64,6 +65,7 @@ export function endJobSubmission() {
 }
 
 export function saveJobMonitor(ids, warning = null) {
+  validateRecoveryBackend(API_CONFIGURATION.baseUrl);
   localStorage.setItem(storageKey, JSON.stringify({ ids, warning }));
 }
 
@@ -74,11 +76,16 @@ export async function recoverJobMonitor({ signal } = {}) {
     await awaitRequest(() => submission, { signal, timeoutMs: null });
   }
   signal?.throwIfAborted();
+  validateRecoveryBackend(API_CONFIGURATION.baseUrl);
   const stored = localStorage.getItem(storageKey);
   const saved = stored ? JSON.parse(stored) : { ids: [], warning: null };
   if (!Array.isArray(saved.ids) || saved.ids.some((id) => typeof id !== 'string')) {
     throw new Error('Saved job monitor is invalid. Clear this site\'s stored monitor before submitting new jobs.');
   }
+  const journal = createSubmissionJournal().read();
+  saved.ids = [...new Set([...saved.ids, ...journal.batches.flatMap((batch) => batch.entries)
+    .filter((entry) => entry.state === 'accepted').map((entry) => entry.jobId)])];
+  saved.warning = [saved.warning, ...submissionWarnings(journal).filter((warning) => !saved.warning?.includes(warning))].filter(Boolean).join(' ') || null;
   const recovered = new Map();
   const errors = new Map();
   for (const id of saved.ids) {

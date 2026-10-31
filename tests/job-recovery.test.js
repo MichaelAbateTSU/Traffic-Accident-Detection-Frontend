@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createContext, SourceTextModule, SyntheticModule } from 'node:vm';
-import { componentHarness, deferred } from './componentHarness.js';
+import { componentHarness, deferred, journalDependencies } from './componentHarness.js';
 
 function deadlineClock() {
   const timers = new Map();
@@ -38,7 +38,12 @@ async function monitorHarness({ saved = null, getJob = async (id) => ({ item: { 
   });
   const source = await readFile(new URL('../src/services/jobMonitor.js', import.meta.url), 'utf8');
   const module = new SourceTextModule(source, { context });
-  await module.link(() => new SyntheticModule(['API_CONFIGURATION', 'getJob', 'getJobs'], function () {
+  const journal = journalDependencies({ storage });
+  await module.link((specifier) => specifier === './submissionJournal.js'
+    ? new SyntheticModule(Object.keys(journal), function () {
+      for (const [name, value] of Object.entries(journal)) this.setExport(name, value);
+    }, { context })
+    : new SyntheticModule(['API_CONFIGURATION', 'getJob', 'getJobs'], function () {
     this.setExport('API_CONFIGURATION', { baseUrl: 'https://backend.example' });
     this.setExport('getJob', getJob);
     this.setExport('getJobs', getJobs);
@@ -58,6 +63,7 @@ test('recovery merges saved partial/terminal jobs with every page of backend que
       return { items: [{ id: query.page === 1 ? 'accepted-2' : 'queued-9', status: 'pending' }], meta: { pagination: { has_next: query.page === 1 } } };
     },
   });
+
   const result = await api.recoverJobMonitor({});
   assert.deepEqual([...result.jobs.map((item) => item.id)], ['accepted-1', 'accepted-2', 'queued-9', 'running-1']);
   assert.equal(result.jobs[0].status, 'complete');
@@ -68,6 +74,34 @@ test('recovery merges saved partial/terminal jobs with every page of backend que
   const restored = await api.recoverJobMonitor({});
   assert.equal(restored.jobs.length, 4);
 });
+
+test('the submission journal remains authoritative for accepted IDs when the monitor is replaced; warnings do not duplicate on reload', async () => {
+  const { api, storage } = await monitorHarness();
+  const journal = journalDependencies({ storage }).createSubmissionJournal();
+  const batch = await journal.prepareBatch(['source-1', 'source-2'], {
+    maxFrames: 120, saveFrames: false, sourceKind: 'fixed-camera', protocol: 'legacy',
+  });
+  journal.markSending(batch.entries[0].key);
+  journal.accept(batch.entries[0].key, 'accepted-durable');
+  journal.markSending(batch.entries[1].key);
+  journal.warn(batch.id, 'navigation');
+  api.saveJobMonitor([], null);
+  const first = await api.recoverJobMonitor({});
+  assert.equal(first.jobs[0].id, 'accepted-durable');
+  assert.match(first.warning, /1 of 2.*1 submission outcomes unknown/);
+  api.saveJobMonitor([], first.warning);
+  const second = await api.recoverJobMonitor({});
+  assert.equal(second.warning, first.warning);
+  assert.equal(second.jobs[0].id, 'accepted-durable');
+});
+
+async function waitForSubmissions(submissions, count, harness) {
+  for (let attempt = 0; submissions.length < count && attempt < 100; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(submissions.length, count);
+  await harness.flush();
+}
 
 test('job errors remain visible, 404 has unknown outcome, and listing failures reject unsafe recovery', async () => {
   const { api } = await monitorHarness({
@@ -88,6 +122,7 @@ async function dashboardHarness(recoverJobMonitor, getMonitoredJob = async (id) 
   const submissions = [];
   const persisted = [];
   const harness = await componentHarness('../src/pages/Dashboard/Dashboard.jsx', {
+    '../../services/submissionJournal.js': options.journal ?? journalDependencies(),
     'react-router-dom': { Link: 'Link' },
     '../../constants/cameras.js': { FIXED_CAMERA_STREAM_URLS: options.sources ?? ['stream-1', 'stream-2'] },
     '../../services/api.js': {
@@ -420,7 +455,7 @@ test('an accepted job polls while the next POST never settles; unmount cancels G
   harness.render();
   await harness.flush();
   const batch = harness.elements.find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
-  await harness.flush();
+  await waitForSubmissions(submissions, 2, harness);
   assert.equal(submissions.length, 2);
   assert.equal(persisted.at(-1).ids[0], 'accepted-first');
   const job = harness.elements.find((node) => node.type === 'JobStatusCard').props.job;
@@ -467,7 +502,7 @@ test('serial acceptance preserves progressive GET results and completed jobs do 
   harness.render();
   await harness.flush();
   const batch = harness.elements.find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
-  await harness.flush();
+  await waitForSubmissions(submissions, 3, harness);
   for (const tick of harness.timers.values()) tick();
   await harness.flush();
   const jobs = () => harness.elements.filter((node) => node.type === 'JobStatusCard').map((node) => node.props.job);
@@ -501,7 +536,7 @@ test('late confirmed acceptance after navigation is persisted without issuing re
   harness.render();
   await harness.flush();
   const batch = harness.elements.find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
-  await harness.flush();
+  await waitForSubmissions(submissions, 1, harness);
   harness.unmount();
   const before = JSON.stringify(harness.elements);
   late.resolve({ item: { id: 'late-accepted', status: 'pending' } });
@@ -532,7 +567,7 @@ test('navigation after the final source POST does not invent a partial warning o
   harness.render();
   await harness.flush();
   const batch = harness.elements.find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
-  await harness.flush();
+  await waitForSubmissions(submissions, 2, harness);
   harness.unmount();
   lastPost.resolve({ item: { id: 'last', status: 'pending' } });
   await batch;
@@ -669,7 +704,7 @@ test('job B accepted after stalled GET A updates before A times out with one req
   harness.render();
   await harness.flush();
   const batch = harness.elements.find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
-  await harness.flush();
+  await waitForSubmissions(submissions, 2, harness);
   assert.equal(reads.length, 1);
   assert.equal(reads[0].id, 'A');
   assert.equal(clock.timers.size, 1);

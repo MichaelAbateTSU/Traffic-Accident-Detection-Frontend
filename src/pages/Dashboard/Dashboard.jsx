@@ -15,6 +15,7 @@ import SectionCard from '../../components/SectionCard/SectionCard.jsx';
 import CameraPreviewCard from '../../components/CameraPreviewCard/CameraPreviewCard.jsx';
 import { parseMaxFrames, startDetectionJob } from '../../services/api.js';
 import { beginJobSubmission, endJobSubmission, getMonitoredJob, recoverJobMonitor, saveJobMonitor } from '../../services/jobMonitor.js';
+import { createSubmissionJournal, hasUncertainSubmissions, submissionWarnings } from '../../services/submissionJournal.js';
 import { FIXED_CAMERA_STREAM_URLS } from '../../constants/cameras.js';
 import { formatDateTime, formatNumber, formatPercent } from '../../utils/formatters.js';
 import { useDashboardData } from '../../hooks/useDashboardData.js';
@@ -117,6 +118,9 @@ export default function Dashboard() {
   const [monitorRecoveryError, setMonitorRecoveryError] = useState(null);
   const [monitorStorageError, setMonitorStorageError] = useState(null);
   const [recoveryKey, setRecoveryKey] = useState(0);
+  const [submissionIntents, setSubmissionIntents] = useState({ version: 1, batches: [] });
+  const journalRef = useRef(null);
+  if (!journalRef.current) journalRef.current = createSubmissionJournal();
   const totalFixedCameras = FIXED_CAMERA_STREAM_URLS.length;
   const pollingTimerRef = useRef(null);
   const pollingRequestsRef = useRef(new Map());
@@ -222,6 +226,13 @@ export default function Dashboard() {
     recoveringMonitorRef.current = true;
     setRecoveringMonitor(true);
     setMonitorRecoveryError(null);
+    try {
+      setSubmissionIntents(journalRef.current.read());
+    } catch (error) {
+      setMonitorRecoveryError(error.message);
+      setRecoveringMonitor(false);
+      return () => controller.abort();
+    }
     recoverJobMonitor({ signal: controller.signal })
       .then(({ jobs: recovered, warning, error: recoveryError }) => {
         if (!active) return;
@@ -257,8 +268,6 @@ export default function Dashboard() {
     } catch (error) {
       if (monitorMountedRef.current) {
         setMonitorStorageError(`Cannot save job monitor for reload recovery: ${error.message}. Active jobs will still be recovered from the backend.`);
-      } else {
-        console.error('Cannot save accepted job monitor after navigation:', error);
       }
     }
   }
@@ -289,20 +298,50 @@ export default function Dashboard() {
       setBatchStartError('Wait for the accepted detection jobs to finish before starting another submission. Monitoring continues.');
       return;
     }
-    setBatchStartError(null);
+    let batch;
     startingJobRef.current = true;
+    setStartingJob(true);
+    try {
+      batch = await journalRef.current.prepareBatch(sources, {
+        maxFrames: frameCount, saveFrames,
+        sourceKind: sources === FIXED_CAMERA_STREAM_URLS ? 'fixed-camera' : 'arbitrary',
+        protocol: 'legacy',
+      });
+      if (!monitorMountedRef.current) {
+        journalRef.current.warn(batch.id, 'navigation');
+        startingJobRef.current = false;
+        return;
+      }
+      setSubmissionIntents(journalRef.current.read());
+    } catch (error) {
+      if (monitorMountedRef.current) {
+        setJobSubmissionError(error.message);
+        setStartingJob(false);
+      }
+      startingJobRef.current = false;
+      return;
+    }
+    setBatchStartError(null);
     beginJobSubmission();
 
     setStartingJob(true);
     stopBatchPolling();
     setJobError(null);
     setJobSubmissionError(null);
-    monitoredJobsRef.current = [];
-    setMonitoredJobs([]);
-
     const queuedResponses = [];
     try {
-      for (const streamUrl of sources) {
+      for (const [sourceIndex, streamUrl] of sources.entries()) {
+        if (!monitorMountedRef.current) {
+          journalRef.current.warn(batch.id, 'navigation');
+          break;
+        }
+        // The legacy transport has no reconciliation contract. Never replay these keys.
+        const intent = batch.entries[sourceIndex];
+        setSubmissionIntents(journalRef.current.markSending(intent.key));
+        if (sourceIndex === 0) {
+          monitoredJobsRef.current = [];
+          setMonitoredJobs([]);
+        }
         const { item } = await startDetectionJob({
           stream_url: streamUrl,
           save_frames: saveFrames,
@@ -319,12 +358,20 @@ export default function Dashboard() {
           frames: mergeFrameImages([], item?.frames ?? []),
         });
         queuedResponses.push(acceptedJob);
+        let journalSaveError;
+        try {
+          journalRef.current.accept(intent.key, id);
+        } catch (error) {
+          persistMonitor(queuedResponses.map((job) => job.id), 'Confirmed acceptance could not be saved in the submission journal. Retain accepted job IDs; do not replay.');
+          journalSaveError = error;
+        }
         // Keep known acceptance for recovery, but do not continue a batch after navigation.
         if (!monitorMountedRef.current) {
           const remaining = sources.length - queuedResponses.length;
           persistMonitor(queuedResponses.map((job) => job.id), remaining > 0
             ? `${queuedResponses.length} of ${sources.length} jobs started; submission stopped after navigation: ${remaining} sources were not submitted.`
             : null);
+          if (remaining > 0) journalRef.current.warn(batch.id, 'navigation');
           break;
         }
         persistMonitor(queuedResponses.map((job) => job.id));
@@ -336,18 +383,28 @@ export default function Dashboard() {
           }
           refreshPendingJobs();
         }
+        if (journalSaveError) throw journalSaveError;
+        setSubmissionIntents(journalRef.current.read());
       }
 
       if (!queuedResponses.length) {
         throw new Error('No jobs were started.');
       }
     } catch (err) {
-      console.error(err);
       const warning = queuedResponses.length
         ? `${queuedResponses.length} of ${sources.length} jobs started; submission stopped: ${err.message}`
         : err.message;
       if (monitorMountedRef.current) setJobSubmissionError(warning);
-      persistMonitor(queuedResponses.map((job) => job.id), warning);
+      // Do not store arbitrary backend error text: it may echo a signed source URL.
+      let durableWarning = `${queuedResponses.length} of ${sources.length} jobs started; submission stopped. An unconfirmed outcome must not be retried.`;
+      try {
+        const document = journalRef.current.warn(batch.id, 'submission');
+        durableWarning = submissionWarnings(document).join(' ');
+        if (monitorMountedRef.current) setSubmissionIntents(document);
+      } catch (error) {
+        if (monitorMountedRef.current) setMonitorStorageError(error.message);
+      }
+      persistMonitor(queuedResponses.map((job) => job.id), durableWarning);
     } finally {
       if (queuedResponses.length && monitorMountedRef.current) reload();
       if (monitorMountedRef.current) setStartingJob(false);
@@ -385,6 +442,7 @@ export default function Dashboard() {
   const failedJobsCount = monitoredJobs.filter((jobItem) => isFailedStatus(jobItem.status)).length;
   const activeJobsCount = monitoredJobs.filter((jobItem) => isActiveStatus(jobItem.status)).length;
   const unavailableJobsCount = monitoredJobs.filter((jobItem) => jobItem.status === 'unavailable').length;
+  const uncertainSubmissions = hasUncertainSubmissions(submissionIntents);
   const allBatchJobsComplete = monitoredJobs.length > 0 && monitoredJobs.every((jobItem) => isTerminalStatus(jobItem.status));
   const latestCompletedJob = useMemo(() => {
     const completed = monitoredJobs.filter((jobItem) => isCompleteStatus(jobItem.status));
@@ -576,7 +634,7 @@ export default function Dashboard() {
             />
             Save frames
           </label>
-          <button type="submit" className={styles.retryBtn} disabled={startingJob || activeJobsCount > 0 || recoveringMonitor || Boolean(monitorRecoveryError)}>
+          <button type="submit" className={styles.retryBtn} disabled={startingJob || uncertainSubmissions || activeJobsCount > 0 || recoveringMonitor || Boolean(monitorRecoveryError)}>
             {startingJob ? 'Submitting detection jobs...' : `Run detection across ${totalFixedCameras} cameras`}
           </button>
         </form>
@@ -588,7 +646,7 @@ export default function Dashboard() {
           <form className={styles.jobForm} onSubmit={handleVideoJob}>
             <label htmlFor="videoSource">Approved HTTPS video URL</label>
             <input id="videoSource" type="url" required value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} />
-            <button type="submit" disabled={startingJob || activeJobsCount > 0 || recoveringMonitor || Boolean(monitorRecoveryError)}>
+            <button type="submit" disabled={startingJob || uncertainSubmissions || activeJobsCount > 0 || recoveringMonitor || Boolean(monitorRecoveryError)}>
               {startingJob ? 'Submission in progress...' : 'Run single video'}
             </button>
           </form>
@@ -621,6 +679,15 @@ export default function Dashboard() {
           </div>
         )}
         {monitorStorageError && <p role="alert">{monitorStorageError}</p>}
+        {uncertainSubmissions && (
+          <div role="alert">
+            <p>A submission may already have been accepted. New submissions are blocked; reload does not start inference or make retry safe.</p>
+            <p>Legacy submissions cannot be looked up or replayed by request key. Keyed recovery is not connected until the backend contract is verified.</p>
+            {submissionIntents.batches.flatMap((batch) => batch.entries).filter((entry) => ['uncertain', 'not-recorded', 'expired'].includes(entry.state)).map((entry) => (
+              <p key={entry.key}>Request {entry.key}: {entry.state === 'expired' ? 'identity expired; outcome unknown' : entry.state === 'not-recorded' ? 'no receipt found yet; the original request may still arrive' : 'acceptance uncertain'}.</p>
+            ))}
+          </div>
+        )}
         {unavailableJobsCount > 0 && (
           <div role="alert">
             <p>{unavailableJobsCount} jobs unavailable; inference outcomes are unknown, not failed. Missing records may have expired or never existed.</p>

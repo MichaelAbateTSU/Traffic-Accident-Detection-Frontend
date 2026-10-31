@@ -4,6 +4,7 @@ import test from 'node:test';
 import { createContext, SourceTextModule, SyntheticModule } from 'node:vm';
 import { transformWithEsbuild } from 'vite';
 import { FIXED_CAMERA_STREAM_URLS } from '../src/constants/cameras.js';
+import { journalDependencies } from './componentHarness.js';
 
 const source = await readFile(new URL('../src/pages/Dashboard/Dashboard.jsx', import.meta.url), 'utf8');
 const { code } = await transformWithEsbuild(source, 'Dashboard.jsx', { jsx: 'automatic' });
@@ -71,6 +72,7 @@ async function createDashboard({ failAt = Infinity, status = 'pending', submissi
     'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'Fragment' },
     'react-router-dom': { Link: 'Link' },
     '../../constants/cameras.js': { FIXED_CAMERA_STREAM_URLS },
+    '../../services/submissionJournal.js': journalDependencies(),
     '../../services/api.js': {
       parseMaxFrames,
       async startDetectionJob(payload) {
@@ -180,7 +182,7 @@ for (const [label, failAt, accepted] of [
 
     const previousPayloads = dashboard.payloads.length;
     await dashboard.submit();
-    assert.equal(dashboard.timers.size, 1);
+    assert.equal(dashboard.timers.size, accepted ? 1 : 0);
     if (accepted) {
       assert.equal(dashboard.payloads.length, previousPayloads);
       assert.equal(warnings().length, failAt === Infinity ? 0 : 1);
@@ -190,11 +192,16 @@ for (const [label, failAt, accepted] of [
       assert.equal(dashboard.timers.size, 0);
       dashboard.setStatus('pending');
       await dashboard.submit();
-      assert.equal(dashboard.payloads.length, previousPayloads + 9);
-      assert.equal(warnings().length, 0);
-      assert.equal(dashboard.timers.size, 1);
+      if (failAt === Infinity) {
+        assert.equal(dashboard.payloads.length, previousPayloads + 9);
+        assert.equal(warnings().length, 0);
+        assert.equal(dashboard.timers.size, 1);
+      } else {
+        assert.equal(dashboard.payloads.length, previousPayloads, 'unknown acceptance must block replay even after accepted jobs finish');
+        assert.equal(dashboard.timers.size, 0);
+      }
     } else {
-      assert.equal(warnings().length, 0);
+      assert.equal(dashboard.payloads.length, previousPayloads, 'a transport failure does not prove rejection');
     }
   });
 }
@@ -293,7 +300,9 @@ test('concurrent batch start is blocked even before the first job is accepted', 
   const submissionGate = new Promise((resolve) => { release = resolve; });
   const dashboard = await createDashboard({ submissionGate });
   const first = dashboard.submit();
-  await new Promise((resolve) => setImmediate(resolve));
+  for (let count = 0; !dashboard.payloads.length && count < 100; count++) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
   assert.equal(dashboard.payloads.length, 1);
   await dashboard.submit();
   assert.equal(dashboard.payloads.length, 1);

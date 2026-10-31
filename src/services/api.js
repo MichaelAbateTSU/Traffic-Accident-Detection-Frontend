@@ -105,21 +105,27 @@ function normalizeCameraStatus(value) {
   return 'offline';
 }
 
-function createApiError(message, { status, requestId, details } = {}) {
+function createApiError(message, { status, requestId, details, code } = {}) {
   const error = new Error(message);
   error.status = status ?? null;
   error.requestId = requestId ?? null;
   error.details = details ?? null;
+  error.code = code ?? null;
   return error;
 }
 
 function normalizeApiError(responseStatus, payload) {
   const requestId = payload?.meta?.request_id ?? payload?.request_id ?? null;
-  const message = payload?.error?.message ?? payload?.detail ?? payload?.message ?? payload?.error ?? `HTTP ${responseStatus}`;
+  const detail = payload?.detail;
+  const message = [payload?.error?.message, detail?.message, detail, payload?.message, payload?.error]
+    .find((value) => typeof value === 'string' && value.length > 0)
+    ?? (Array.isArray(detail) ? 'Request validation failed. Check the submission fields.' : `HTTP ${responseStatus}`);
+  const code = payload?.error?.code ?? detail?.code ?? payload?.code;
   return createApiError(message, {
     status: responseStatus,
     requestId,
     details: payload?.error ?? payload ?? null,
+    code: typeof code === 'string' ? code : null,
   });
 }
 

@@ -85,6 +85,7 @@ test('backend errors and successful HTML instead of JSON or images are explicit 
       blob: async () => new Blob(['<html>'], { type: 'text/html' }),
     }),
   });
+
   await assert.rejects(invalid.getHealth(), /invalid JSON/);
   await assert.rejects(invalid.fetchArtifactBlob('/artifacts/image'), /invalid image/);
   const unauthorized = await loadApi(env, {
@@ -92,6 +93,37 @@ test('backend errors and successful HTML instead of JSON or images are explicit 
   });
   await assert.rejects(unauthorized.getHealth(), /Invalid operator token/);
   await assert.rejects(unauthorized.fetchArtifactBlob('/artifacts/image'), /HTTP 401/);
+});
+
+test('structured errors retain HTTP status and protocol code; validation lists do not stringify or echo inputs', async () => {
+  for (const status of [404, 409, 410, 503]) {
+    const api = await loadApi({}, {
+      fetch: async () => ({ ok: false, status, json: async () => ({
+        detail: { code: `submission_${status}`, message: 'Submission receipt unavailable.' },
+        meta: { request_id: 'request-1' },
+      }) }),
+    });
+    await assert.rejects(api.getHealth(), (error) => {
+      assert.equal(error.status, status);
+      assert.equal(error.code, `submission_${status}`);
+      assert.equal(error.requestId, 'request-1');
+      assert.equal(error.message, 'Submission receipt unavailable.');
+      return true;
+    });
+  }
+  const api = await loadApi({}, {
+    fetch: async () => ({ ok: false, status: 422, json: async () => ({
+      detail: [{ loc: ['body', 'stream_url'], msg: 'invalid URL', input: 'private-source-input' }],
+    }) }),
+  });
+  await assert.rejects(api.getHealth(), (error) => {
+    assert.equal(error.status, 422);
+    assert.equal(error.code, null);
+    assert.equal(error.message, 'Request validation failed. Check the submission fields.');
+    assert.ok(!error.message.includes('private-source-input'));
+    assert.ok(!error.message.includes('[object Object]'));
+    return true;
+  });
 });
 
 test('CSV exports carry authorization and revoke their temporary download URL', async () => {
