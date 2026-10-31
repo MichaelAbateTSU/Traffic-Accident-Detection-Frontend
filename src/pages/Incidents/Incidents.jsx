@@ -74,10 +74,10 @@ export default function Incidents() {
   }, [debouncedQuery, retryKey]);
 
   useEffect(() => {
+    setSelectedIncident(null);
+    setDetailMeta(null);
+    setDetailError(null);
     if (!selectedIncidentId) {
-      setSelectedIncident(null);
-      setDetailMeta(null);
-      setDetailError(null);
       return;
     }
     const controller = new AbortController();
@@ -86,11 +86,12 @@ export default function Incidents() {
       try {
         // On-demand detail fetch avoids unnecessary N+1 calls.
         const { item, meta: metaValue } = await getIncidentById(selectedIncidentId, { signal: controller.signal });
+        if (controller.signal.aborted) return;
         setSelectedIncident(item);
         setDetailMeta(metaValue);
         setDetailError(null);
       } catch (err) {
-        if (err.name === 'AbortError') return;
+        if (err.name === 'AbortError' || controller.signal.aborted) return;
         setDetailError(err.message);
       } finally {
         if (!controller.signal.aborted) setLoadingDetail(false);
@@ -113,7 +114,7 @@ export default function Incidents() {
   };
 
   const handleIncidentUpdated = (updated) => {
-    setSelectedIncident(updated);
+    setSelectedIncident((selected) => selected?.id === updated.id ? updated : selected);
     const filteredOut = status !== 'all' && updated.status !== status;
     if (filteredOut) {
       setRetryKey((value) => value + 1);

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import DetectionSignalsChart from '../charts/DetectionSignalsChart.jsx';
 import StatusBadge from '../StatusBadge/StatusBadge.jsx';
 import { updateIncidentStatus } from '../../services/api.js';
@@ -20,6 +20,9 @@ export default function IncidentDetailPanel({ incident, onIncidentUpdated }) {
   const [note, setNote] = useState(incident?.note ?? '');
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState(null);
+  const selectedIdRef = useRef(incident?.id);
+  const activeSaveRef = useRef(null);
+  selectedIdRef.current = incident?.id;
 
   useEffect(() => {
     setCurrent(incident);
@@ -27,23 +30,39 @@ export default function IncidentDetailPanel({ incident, onIncidentUpdated }) {
     setActionError(null);
   }, [incident]);
 
+  useEffect(() => {
+    activeSaveRef.current = null;
+    setSaving(false);
+    return () => {
+      activeSaveRef.current = null;
+    };
+  }, [incident?.id]);
+
   if (!current) return null;
 
   const isResolved = Boolean(current.resolved);
   const noteChanged = note !== (current.note ?? '');
 
   const submit = async (nextStatus) => {
+    const request = { incidentId: current.id };
+    activeSaveRef.current = request;
+    const isCurrentRequest = () => activeSaveRef.current === request && selectedIdRef.current === request.incidentId;
     setSaving(true);
     setActionError(null);
     try {
       const { item } = await updateIncidentStatus(current.id, { status: nextStatus, note });
-      setCurrent(item);
-      setNote(item.note ?? '');
+      if (isCurrentRequest()) {
+        setCurrent(item);
+        setNote(item.note ?? '');
+      }
       onIncidentUpdated?.(item);
     } catch (err) {
-      setActionError(err.message ?? 'Failed to update incident');
+      if (isCurrentRequest()) setActionError(err.message ?? 'Failed to update incident');
     } finally {
-      setSaving(false);
+      if (isCurrentRequest()) {
+        activeSaveRef.current = null;
+        setSaving(false);
+      }
     }
   };
 
