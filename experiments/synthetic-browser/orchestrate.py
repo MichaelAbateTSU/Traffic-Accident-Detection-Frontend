@@ -253,6 +253,15 @@ print(json.dumps({'temporary_artifact_files':artifact_files,**counts}))
                            capture=True, check=False, timeout=120)
         print(json.dumps(json.loads(recovery.stdout)), flush=True)
         assert recovery.returncode==0
+        after_restart = container_json("""
+import json
+from pathlib import Path
+counts=json.loads(Path('/data/inference-counts.json').read_text())
+for key in ['yolo_calls','tracker_calls','scorer_calls']:
+    assert counts[key]==12
+print(json.dumps({'cumulative_inference_calls_after_restart':counts,'one_inference_after_all_retries':True}))
+""")
+        print(json.dumps(after_restart), flush=True)
 except Exception as error:
     evidence = {"status": "bounded_experiment_blocked", "stage": stage, "error_type": type(error).__name__}
     if isinstance(error, subprocess.CalledProcessError):

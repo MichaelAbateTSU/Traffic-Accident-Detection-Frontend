@@ -7,6 +7,8 @@ from app import main
 from app.services import detection_service as service
 
 counts = {"yolo_calls": 0, "tracker_calls": 0, "scorer_calls": 0, "vehicle_detections": 0}
+if Path("/data/inference-counts.json").exists():
+    counts.update(json.loads(Path("/data/inference-counts.json").read_text()))
 
 
 def measure(owner, name, key, length_key=None):
