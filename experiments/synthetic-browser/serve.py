@@ -7,8 +7,9 @@ from pathlib import Path
 import uvicorn
 from app import main
 from app.services import detection_service as service
+from inference_inventory import InferenceInventory
 
-counts = {"yolo_calls": 0, "tracker_calls": 0, "scorer_calls": 0, "vehicle_detections": 0}
+inventory = InferenceInventory("/data/inference-counts.json")
 
 
 def measure(owner, name, key, length_key=None):
@@ -16,10 +17,10 @@ def measure(owner, name, key, length_key=None):
 
     @functools.wraps(original)
     def wrapped(*args, **kwargs):
+        inventory.increment(key)
         result = original(*args, **kwargs)
-        counts[key] += 1
         if length_key:
-            counts[length_key] += len(result)
+            inventory.increment(length_key, len(result))
         return result
 
     setattr(owner, name, wrapped)
@@ -32,6 +33,7 @@ original_job = service.run_detection_job
 
 
 def measured_job(*args, **kwargs):
+    inventory.begin()
     try:
         if os.environ.get("SYNTHETIC_DETAIL_GATE") == "1":
             deadline = time.monotonic() + 15
@@ -39,7 +41,7 @@ def measured_job(*args, **kwargs):
                 time.sleep(0.025)
         return original_job(*args, **kwargs)
     finally:
-        Path("/data/inference-counts.json").write_text(json.dumps(counts))
+        inventory.finish()
 
 
 main.run_detection_job = measured_job

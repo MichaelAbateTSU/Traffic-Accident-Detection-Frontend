@@ -4,15 +4,19 @@ import { execFileSync } from 'node:child_process';
 import { createSubmissionResponseFault } from './submission_response_fault.mjs';
 import { createSparseReceiptFault } from './sparse_receipt_fault.mjs';
 import { createStaleJobDetailFault } from './stale_job_detail_fault.mjs';
+import { createStaleActiveListFault } from './stale_active_list_fault.mjs';
 
 const api = 'https://api.integration.test:8453';
 const frontend = 'https://frontend.integration.test:8454';
 const token = process.env.API_TOKEN;
 const source = 'https://media.githubusercontent.com/media/accidentbench/accidentbench.github.io/main/assets/videos/synthetic/Town03_head-on_clear_30.mp4';
 const phase = process.argv[2] || 'initial';
+const orderingCase = process.env.ORDERING_CASE || 'saved-id-detail';
 let stage = 'devtools', ws, serial = 0;
 const pending = new Map();
 const posts = [];
+const artifactRequests = new Map();
+const fullJobRequests = new Map();
 let exceptions = 0, externalBlocked = 0, cancelled = 0;
 const interceptionFailures = [];
 let send, evaluate;
@@ -22,9 +26,20 @@ let fulfilledLegacyLookups = 0;
 let legacyBoundary = false;
 let olderDetailFault, gatedIdentity, gatedLookupId;
 let olderDetailVerified = false;
+let activeListFault, noSavedIdListVerified = false;
 function container(script) {
   return JSON.parse(execFileSync('docker', ['exec', 'r2-browser-api', 'python', '-c', script],
     { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] }));
+}
+function inferenceInventory() {
+  return container("from pathlib import Path; print(Path('/data/inference-counts.json').read_text())");
+}
+async function assertStableInventory(expected) {
+  const deadline = Date.now() + 2000;
+  do {
+    assert.deepEqual(inferenceInventory(), expected);
+    await new Promise(resolve => setTimeout(resolve, 100));
+  } while (Date.now() < deadline);
 }
 try {
   const targets = await (await fetch('http://127.0.0.1:9225/json/list')).json();
@@ -88,6 +103,7 @@ try {
           }
         }
         if (olderDetailFault && await olderDetailFault.paused(event)) return;
+        if (activeListFault && await activeListFault.paused(event)) return;
         if (sparseFault && await sparseFault.paused(event)) return;
         if (phase === 'initial' && await loss.paused(event)) return;
         await send(event.responseStatusCode == null ? 'Fetch.continueRequest' : 'Fetch.continueResponse',
@@ -100,6 +116,13 @@ try {
       exceptions++;
     } else if (message.method === 'Network.requestWillBeSent') {
       const r = message.params.request;
+      if (r.url.startsWith(`${api}/artifacts/`) && r.method === 'GET') {
+        const headers = Object.fromEntries(Object.entries(r.headers).map(([k, v]) => [k.toLowerCase(), v]));
+        artifactRequests.set(r.url, headers.authorization === `Bearer ${token}`);
+      }
+      if (r.url.startsWith(`${api}/jobs/`) && r.method === 'GET' && !r.url.endsWith('/status')) {
+        fullJobRequests.set(r.url, (fullJobRequests.get(r.url) || 0) + 1);
+      }
       if (r.url === `${api}/detection-submissions/v1` && r.method === 'POST') {
         const headers = Object.fromEntries(Object.entries(r.headers).map(([k, v]) => [k.toLowerCase(), v]));
         assert.equal(headers.authorization, `Bearer ${token}`);
@@ -140,6 +163,41 @@ try {
   }
   const journalExpression = `JSON.parse(localStorage.getItem(${JSON.stringify(`tad_submissions:v1:${api}`)})||'{"batches":[]}')`;
   const cardExpression = id => `([...document.querySelectorAll('article')].find(n=>n.textContent.includes(${JSON.stringify(`Job ID: ${id}`)})))`;
+  async function verifyAllMountedDetails(job) {
+    const card = cardExpression(job.job_id);
+    await wait(`${card}?.textContent.includes("Status: done") && ${card}?.textContent.includes("Frames processed: 12")`);
+    assert.ok(await evaluate(`${card}.textContent.includes(${JSON.stringify(`Peak heuristic accident score (0-1): ${job.peak_confidence.toFixed(2)}`)})`));
+    assert.ok(await evaluate(`${card}.textContent.includes("Alarm frames (0)") && ${card}.textContent.includes("No alarm-frame records returned.")`));
+    const gallery = `${card}.querySelector(${JSON.stringify(`section[aria-label="Saved frames for job ${job.job_id}"]`)})`;
+    let decoded = 0;
+    for (let page = 0; page < 4; page++) {
+      await evaluate(`(() => {
+        const gallery=${gallery};
+        gallery.scrollIntoView();
+        const select=gallery.querySelector('select');
+        select.value=${JSON.stringify(String(page))};
+        select.dispatchEvent(new Event('change',{bubbles:true}));
+      })()`);
+      const firstIndex = job.frames[page * 3].frame_index;
+      await wait(`${gallery}.querySelector("h4")?.textContent===${JSON.stringify(`Frame ${firstIndex}`)}`);
+      for (let image = 0; image < 9; image++) {
+        await evaluate(`${gallery}.querySelectorAll("img")[${image}].scrollIntoView()`);
+        await wait(`(() => {
+          const image=${gallery}.querySelectorAll("img")[${image}];
+          return image?.src.startsWith("blob:")&&image.complete&&image.naturalWidth>0;
+        })()`);
+        decoded++;
+      }
+      for (const frame of job.frames.slice(page * 3, page * 3 + 3)) {
+        for (const field of ['capture', 'capture_annotated', 'pipeline_output']) {
+          assert.equal(artifactRequests.get(frame[field]), true,
+            'Original saved-frame reference was not fetched with authentication');
+        }
+      }
+    }
+    assert.equal(decoded, 36);
+    return decoded;
+  }
   async function seedUncertainIdentity(key, jobId, retainSavedId = true) {
     await evaluate(`(() => {
       const journal=${journalExpression};
@@ -201,15 +259,23 @@ try {
       const originalReceipt = await request('/detection-submissions/v1', originalKey);
       assert.equal(originalReceipt.status, 200);
       const originalId = originalReceipt.body.job_id;
-      await seedUncertainIdentity(originalKey, originalId);
-      olderDetailFault = createStaleJobDetailFault(send, api, originalId);
+      const withoutSavedId = orderingCase === 'uncertain-no-id-list';
+      await seedUncertainIdentity(originalKey, originalId, !withoutSavedId);
+      if (withoutSavedId) {
+        assert.deepEqual(await evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(`tad_monitor:${api}`)})).ids`), []);
+        assert.equal(await evaluate(`${journalExpression}.batches.flatMap(b=>b.entries)[0].jobId`), null);
+      }
+      const beforeFullReads = fullJobRequests.get(`${api}/jobs/${originalId}`) || 0;
+      if (withoutSavedId) activeListFault = createStaleActiveListFault(send, api, originalId);
+      else olderDetailFault = createStaleJobDetailFault(send, api, originalId);
+      const orderingFault = activeListFault || olderDetailFault;
       gatedIdentity = originalKey;
       await navigateAwayAndBack();
       const captureDeadline = Date.now() + 10000;
-      while ((!olderDetailFault.held || !gatedLookupId) && Date.now() < captureDeadline) {
+      while ((!orderingFault.held || !gatedLookupId) && Date.now() < captureDeadline) {
         await new Promise(resolve => setTimeout(resolve, 25));
       }
-      assert.equal(olderDetailFault.held, true, 'Actual active detail could not be captured in time');
+      assert.equal(orderingFault.held, true, 'Actual active response could not be captured in time');
       assert.ok(gatedLookupId);
       container("from pathlib import Path; Path('/tmp/synthetic-detail-gate-release').touch(); print('{}')");
       const completeDeadline = Date.now() + 12000;
@@ -233,9 +299,10 @@ try {
         window.terminalObserver.observe(document.body,{subtree:true,childList:true,characterData:true});
         inspect();
       })()`);
-      await olderDetailFault.release();
-      await olderDetailFault.cleanup();
+      await orderingFault.release();
+      await orderingFault.cleanup();
       olderDetailFault = undefined;
+      activeListFault = undefined;
       await wait(`${cardExpression(originalId)}?.textContent.includes("Frames processed: 12") || [...document.querySelectorAll('[role="alert"]')].some(n=>n.textContent.includes("older active")&&n.textContent.includes("Retry"))`);
       await new Promise(resolve => setTimeout(resolve, 500));
       assert.deepEqual(await evaluate('window.terminalRegressions'), []);
@@ -244,8 +311,10 @@ try {
         await click('Retry job result recovery (read only)');
         await wait(`${cardExpression(originalId)}?.textContent.includes("Frames processed: 12")`);
       }
+      if (withoutSavedId) assert.ok((fullJobRequests.get(`${api}/jobs/${originalId}`) || 0) > beforeFullReads);
       assert.equal(posts.length, 1);
-      olderDetailVerified = true;
+      olderDetailVerified = !withoutSavedId;
+      noSavedIdListVerified = withoutSavedId;
     }
   }
   const entry = await wait(`${journalExpression}.batches.flatMap(b=>b.entries)[0]`);
@@ -276,10 +345,18 @@ try {
     assert.equal(durable.status, 'failed');
     assert.equal(posts.length, 1);
     const counts = container("from pathlib import Path; print(Path('/data/inference-counts.json').read_text())");
-    assert.equal(counts.yolo_calls, 12);
-    console.log(JSON.stringify({ status: 'passed', phase, originalPendingDurable: true,
+    const baseline = JSON.parse(fs.readFileSync(process.env.RESULT_FILE, 'utf8')).inventory;
+    assert.deepEqual(counts, baseline);
+    await assertStableInventory(baseline);
+    const admissionJobs = (await request('/jobs')).body.data;
+    const firstId = JSON.parse(fs.readFileSync(process.env.RESULT_FILE, 'utf8')).job.job_id;
+    assert.deepEqual(admissionJobs.map(j=>j.job_id).sort(), [firstId, id].sort());
+    assert.notEqual(firstId, id);
+    console.log(JSON.stringify({ status: 'passed', phase, orderingCase, originalPendingDurable: true,
       navigationPreservedIdentity: true, normalPeriodicFailureRecovery: true,
-      browserPosts: posts.length, additionalInference: 0, exceptions, externalBlocked }));
+      browserPosts: posts.length, separateRejectedAdmissionAttempts: 1,
+      additionalInference: 0, cumulativeInventory: counts, schedulingObservationMs: 2000,
+      exceptions, externalBlocked }));
   } else {
     stage = 'real_terminal_full_result';
     await wait(`${cardExpression(id)}?.textContent.includes("Status: done") && ${cardExpression(id)}?.textContent.includes("Frames processed: 12")`, 120000);
@@ -289,15 +366,11 @@ try {
     assert.equal(job.frames.length, 12);
     assert.ok(Number.isFinite(job.peak_confidence));
     assert.equal(job.events.length, 0);
+    stage = 'all_original_mounted_result_details';
+    const allSavedImages = await verifyAllMountedDetails(job);
     stage = 'mounted_zero_event_details';
     await wait(`${cardExpression(id)}.textContent.includes("Alarm frames (0)")`);
-    stage = 'decoded_authenticated_gallery';
-    await evaluate(`(() => {
-      const title=[...document.querySelectorAll('h3')].find(h=>h.textContent.includes('Frame Images - Job'));
-      if(!title)throw new Error('Mounted gallery missing');
-      title.parentElement.scrollIntoView();
-    })()`);
-    await wait('document.querySelectorAll("img[src^=\\"blob:\\"]").length>=9 && [...document.querySelectorAll("img[src^=\\"blob:\\"]")].every(i=>i.complete&&i.naturalWidth>0)');
+    stage = 'artifact_authentication';
     const badAuth = await evaluate(`fetch(${JSON.stringify(job.frames[0].capture)}).then(r=>r.status)`);
     assert.equal(badAuth, 401);
     const frameAuth = await evaluate(`fetch(${JSON.stringify(job.frames[0].capture)},{headers:{Authorization:${JSON.stringify(`Bearer ${token}`)}}}).then(r=>r.status)`);
@@ -309,12 +382,19 @@ try {
     if (phase === 'initial') {
       assert.equal(loss.counts.admittedResponsesDropped, 1);
       assert.equal(posts.length, 1);
-      fs.writeFileSync(process.env.RESULT_FILE, JSON.stringify({ job, key: entry.key }));
+      const inventory = inferenceInventory();
+      assert.equal(inventory.inference_invocations, 1);
+      assert.equal(inventory.finished_invocations, 1);
+      assert.equal(inventory.in_progress, 0);
+      for (const name of ['yolo_calls', 'tracker_calls', 'scorer_calls']) assert.equal(inventory[name], 12);
+      await assertStableInventory(inventory);
+      fs.writeFileSync(process.env.RESULT_FILE, JSON.stringify({ job, key: entry.key, inventory }));
     } else {
       const previous = JSON.parse(fs.readFileSync(process.env.RESULT_FILE, 'utf8'));
       assert.deepEqual(job, previous.job);
       assert.equal(entry.key, previous.key);
       assert.equal(posts.length, 0);
+      await assertStableInventory(previous.inventory);
       stage = 'late_real_sparse_receipt_full_result';
       await seedUncertainIdentity(entry.key, id);
       sparseFault = createSparseReceiptFault(send, api, entry.key, id);
@@ -329,7 +409,7 @@ try {
       await sparseFault.cleanup();
       sparseFault = undefined;
       await wait(`${journalExpression}.batches.flatMap(b=>b.entries)[0].state==="accepted"`);
-      assert.ok(await evaluate(`${cardExpression(id)}.textContent.includes("Frames processed: 12") && ${cardExpression(id)}.textContent.includes("Alarm frames (0)")`));
+      await verifyAllMountedDetails(job);
       assert.equal(posts.length, 0);
       stage = 'explicit_actual_same_key_replay';
       await seedUncertainIdentity(entry.key, id);
@@ -340,12 +420,14 @@ try {
       await click('Submit original request with same key');
       await wait(`${journalExpression}.batches.flatMap(b=>b.entries)[0].state==="accepted"`);
       await wait(`${cardExpression(id)}?.textContent.includes("Frames processed: 12") && ${cardExpression(id)}?.textContent.includes("Alarm frames (0)")`);
+      await verifyAllMountedDetails(job);
       assert.equal(posts.length, 1);
       assert.equal(posts[0].key, entry.key);
       assert.deepEqual(posts[0].body, { stream_url: source, max_frames: 12, save_frames: true });
       assert.deepEqual((await request(`/jobs/${id}`)).body, job);
       const inference = container("from pathlib import Path; print(Path('/data/inference-counts.json').read_text())");
-      for (const name of ['yolo_calls', 'tracker_calls', 'scorer_calls']) assert.equal(inference[name], 12);
+      assert.deepEqual(inference, previous.inventory);
+      await assertStableInventory(previous.inventory);
       stage = 'mocked_legacy_transport_rejection';
       await seedUncertainIdentity(entry.key, id);
       legacyBoundary = true;
@@ -366,13 +448,15 @@ try {
     assert.deepEqual(listed.map(j=>j.job_id), [id]);
     assert.deepEqual(interceptionFailures, []);
     assert.equal(exceptions, 0);
-    console.log(JSON.stringify({ status: 'passed', phase, job_status: job.status,
+    console.log(JSON.stringify({ status: 'passed', phase, orderingCase, job_status: job.status,
       frames_processed: job.frames_processed, peak_heuristic: job.peak_confidence,
       event_count: job.events.length, browserPosts: posts.length,
       admissionResponsesDroppedBeforeBrowserHeaders: loss.counts.admittedResponsesDropped,
       actualOlderActiveDetailAfterTerminalReceipt: olderDetailVerified,
-      savedImagesDecoded: 9, artifactNoTokenStatus: badAuth, artifactTokenStatus: frameAuth,
+      actualUncertainNoSavedIdStaleListFullResult: noSavedIdListVerified,
+      savedImagesDecoded: allSavedImages, artifactNoTokenStatus: badAuth, artifactTokenStatus: frameAuth,
       recoveryStoragePrivate: true,
+      cumulativeInventory: inferenceInventory(), schedulingObservationMs: 2000,
       ...(phase === 'recovery' ? { lateRealSparseReceiptPreservedDetails: true,
         explicitReplayPosts: 1, additionalInference: 0, mockedLegacyLookupRejection: true,
         actualBackdatedExpiredKeyRejected: true } : {}),
@@ -386,5 +470,6 @@ try {
 } finally {
   await sparseFault?.cleanup();
   await olderDetailFault?.cleanup();
+  await activeListFault?.cleanup();
   ws?.close();
 }

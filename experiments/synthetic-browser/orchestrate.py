@@ -92,6 +92,7 @@ https://frontend.integration.test:8454 {
                "--tmpfs", "/tmp:size=256m,mode=1777",
                "--mount", f"type=bind,source={ROOT / 'serve.py'},target=/app/browser_serve.py,readonly",
                "--mount", f"type=bind,source={ROOT / 'admission_failure_fault.py'},target=/app/admission_failure_fault.py,readonly",
+               "--mount", f"type=bind,source={ROOT / 'inference_inventory.py'},target=/app/inference_inventory.py,readonly",
                "-e", "API_TOKEN", "-e", "ENVIRONMENT=production",
                "-e", "SYNTHETIC_DETAIL_GATE=1",
                "-e", "CORS_ORIGINS=https://frontend.integration.test:8454",

@@ -37,6 +37,8 @@ jobs:
         run: |
           test "$(git -C backend rev-parse HEAD)" = 5a1bfc38e207913c66eb6120e986147a66410424
           test "$(git -C frontend rev-parse HEAD)" = f8461ada80f7ee10d9b5169364c10e9aa9fddef7
+          python -m unittest discover -s experiments/synthetic-browser -p '*_test.py'
+          node --test experiments/synthetic-browser/*_test.mjs
           cd frontend
           npm ci --quiet
           npm test
@@ -52,6 +54,7 @@ jobs:
         run: |
           sudo swapoff --all
           python experiments/synthetic-browser/orchestrate.py
+          ORDERING_CASE=uncertain-no-id-list python experiments/synthetic-browser/orchestrate.py
       - name: Remove temporary services on failure or cancellation
         if: always()
         run: |

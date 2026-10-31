@@ -12,6 +12,7 @@ export function createStaleActiveListFault(send, apiBase, jobId, maximumHoldMs =
   let automaticRelease;
   const counts = { pendingSnapshotsHeld: 0, staleSnapshotsReleased: 0 };
   return {
+    get held() { return Boolean(heldId); },
     counts,
     async paused(event) {
       const url = new URL(event.request.url);
