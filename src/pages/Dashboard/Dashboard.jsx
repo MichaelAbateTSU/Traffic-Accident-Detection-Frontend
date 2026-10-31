@@ -196,6 +196,14 @@ export default function Dashboard() {
 
           const next = monitoredJobsRef.current.map((jobItem) => {
             if (jobItem.id !== jobId) return jobItem;
+            if (!readError && ['complete', 'failed'].includes(jobItem.status) && needsMonitoring(item.status)) {
+              return {
+                ...jobItem,
+                monitorError: jobItem.submissionReceiptOnly
+                  ? 'An older active read cannot confirm terminal result details. Retry job result recovery (read only).'
+                  : jobItem.monitorError,
+              };
+            }
             if (readError) {
               return {
                 ...jobItem,
@@ -324,7 +332,7 @@ export default function Dashboard() {
     monitoredJobsRef.current = previous
       ? monitoredJobsRef.current.map((item) => item.id === acceptedJob.id ? {
         ...(acceptedJob.submissionReceiptOnly
-          ? { ...acceptedJob, ...item, id: acceptedJob.id, status: acceptedJob.status }
+          ? { ...acceptedJob, ...item, id: acceptedJob.id, status: ['complete', 'failed'].includes(item.status) ? item.status : acceptedJob.status }
           : { ...item, ...acceptedJob }),
         monitorError: acceptedJob.monitorError,
         frames: mergeFrameImages(item.frames, acceptedJob.frames),

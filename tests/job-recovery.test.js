@@ -614,6 +614,34 @@ for (const priorFullPoll of [false, true]) {
   });
 }
 
+for (const receiptFirst of [false, true]) {
+  test(`cached active read cannot consume terminal detail recovery (${receiptFirst ? 'receipt first' : 'read first'})`, async () => {
+    const receipt = deferred();
+    const oldRead = deferred();
+    let reads = 0;
+    const { api, storage } = await monitorHarness({
+      saved: { ids: ['original'] },
+      getSubmission: () => receipt.promise,
+      getJob: async () => ++reads === 1 ? oldRead.promise : { item: { id: 'original', status: 'complete', framesProcessed: 120, peakConfidence: 0.87 } },
+    });
+    const journal = journalDependencies({ storage }).createSubmissionJournal();
+    const batch = await journal.prepareBatch(['source'], { maxFrames: 120, saveFrames: false, sourceKind: 'fixed-camera', protocol: 'keyed-v1' });
+    journal.markSending(batch.entries[0].key);
+    const recovery = api.recoverJobMonitor({ journal });
+    await new Promise((resolve) => setImmediate(resolve));
+    if (!receiptFirst) {
+      oldRead.resolve({ item: { id: 'original', status: 'pending' } });
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    receipt.resolve({ item: { id: 'original', status: 'complete', submissionReceiptOnly: true, framesProcessed: null, frames: [] } });
+    if (receiptFirst) oldRead.resolve({ item: { id: 'original', status: 'pending' } });
+    const result = await recovery;
+    assert.equal(reads, 2);
+    assert.equal(result.jobs[0].status, 'complete');
+    assert.equal(result.jobs[0].framesProcessed, 120);
+  });
+}
+
 test('Dashboard does not poll the deferred history queue and its read-only retry restores those references', async () => {
   let responsive = false;
   const reads = [];

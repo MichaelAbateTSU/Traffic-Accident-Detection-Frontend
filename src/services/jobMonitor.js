@@ -209,11 +209,15 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
         const { item } = await getMonitoredJob(id, { signal: historical ? historyController.signal : requestSignal });
         requestSignal.throwIfAborted();
         const previous = recovered.get(id);
+        const staleActive = ['complete', 'failed'].includes(previous?.status) && ['pending', 'running'].includes(item.status);
         recovered.set(id, {
-          ...(['complete', 'failed'].includes(previous?.status) && ['pending', 'running'].includes(item.status) ? previous : item),
+          ...(staleActive ? previous : item),
           recoveringRead: false, recoveryDeferred: false, admissionStatusUnknown: false,
-          submissionReceiptOnly: false,
+          submissionReceiptOnly: staleActive ? previous.submissionReceiptOnly : false,
+          monitorError: staleActive ? 'An older active job read cannot confirm terminal result details. Retry job result recovery (read only).' : item.monitorError,
         });
+        if (staleActive) errors.set(id, recovered.get(id).monitorError);
+        else errors.delete(id);
       } catch (error) {
         if (error.name === 'AbortError') {
           if (!historical || !historyExpired || requestSignal.aborted) throw error;
@@ -284,6 +288,7 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
             recovered.set(item.id, {
               ...(previous && item.submissionReceiptOnly ? { ...item, ...previous, id: item.id, status: item.status } : { ...previous, ...item }),
               recoveringRead: !active, recoveryDeferred: false, admissionStatusUnknown: false, monitorError: null,
+              submissionReceiptOnly: item.submissionReceiptOnly,
             });
           }
           emit([recovered.get(item.id)]);
@@ -293,7 +298,13 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
       ...['pending', 'running'].map(listStatus),
     ]);
     const readHistory = async (id) => {
-      if ((listings.has(id) && !['complete', 'failed'].includes(recovered.get(id)?.status)) || reads.has(id)) return;
+      if (reads.has(id)) {
+        await reads.get(id);
+        const item = recovered.get(id);
+        if (!item?.submissionReceiptOnly || !['complete', 'failed'].includes(item.status)) return;
+        reads.delete(id);
+      }
+      if (listings.has(id) && !['complete', 'failed'].includes(recovered.get(id)?.status)) return;
       if (historyExpired) {
         const message = `Historical job ${id} read deferred after the recovery deadline. Reference retained; outcome unknown. Retry historical recovery explicitly.`;
         errors.set(id, message);

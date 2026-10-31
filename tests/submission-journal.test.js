@@ -472,6 +472,28 @@ test('terminal replay detail 404 keeps terminal status and offers explicit read-
   view.harness.unmount();
 });
 
+test('late sparse active replay cannot downgrade a full terminal result', async () => {
+  const { api } = journalHarness();
+  const batch = await api.prepareBatch([payload.stream_url], options);
+  const key = batch.entries[0].key;
+  api.markSending(key);
+  const full = { id: 'original', status: 'complete', framesProcessed: 120, peakConfidence: 0.87 };
+  const view = await dashboard(api, {
+    recovered: [full],
+    post: async () => ({ item: { id: 'original', status: 'pending', submissionReceiptOnly: true, framesProcessed: null } }),
+    getJob: async () => ({ item: { id: 'original', status: 'pending', framesProcessed: 1 } }),
+  });
+  view.harness.elements.find((item) => item.props.id === `replay-${key}`).props.onChange({ target: { value: payload.stream_url } });
+  await view.harness.flush();
+  await view.harness.elements.find((item) => item.props.children === 'Submit original request with same key').props.onClick();
+  await view.harness.flush();
+  const job = view.harness.elements.find((item) => item.type === 'JobStatusCard').props.job;
+  assert.equal(job.status, 'complete');
+  assert.equal(job.framesProcessed, 120);
+  assert.equal(view.sent.length, 1);
+  view.harness.unmount();
+});
+
 test('acceptance during asynchronous replay validation cannot return a stale replay authorization', async () => {
   const { api } = journalHarness();
   const batch = await api.prepareBatch([payload.stream_url], options);
