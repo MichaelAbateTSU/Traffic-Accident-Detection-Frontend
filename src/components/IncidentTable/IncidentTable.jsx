@@ -86,7 +86,7 @@ export default function IncidentTable({
   return (
     <div className={styles.wrapper}>
       <p>Heuristic accident scores range from 0 to 1; they are not calibrated probabilities.</p>
-      <p>Each row is an alarm frame, not a unique or confirmed accident. Consecutive rows may be one episode. Open/closed statuses track operator review, not a current physical incident or live alarm.</p>
+      <p>Each row is an alarm frame, not a unique or confirmed accident. Consecutive rows may be one episode. Record status defaults to active while the job is pending/running and resolved when it finishes, unless manually overridden. Neither status confirms review, accident resolution or a live alarm.</p>
       <table className={styles.table}>
         <thead>
           <tr>
@@ -103,7 +103,7 @@ export default function IncidentTable({
               Heuristic accident score (0-1) <SortIcon col="confidence" />
             </th>
             {!compact && <th className={styles.th}>Raw heuristic score (0-1)</th>}
-            <th className={styles.th}>Review status</th>
+            <th className={styles.th}>Record status</th>
           </tr>
         </thead>
         <tbody>
@@ -172,7 +172,7 @@ export default function IncidentTable({
               <td className={styles.td}>
                 <StatusBadge
                   status={incident.resolved ? 'resolved' : 'critical'}
-                  label={incident.resolved ? 'Review closed' : 'Review open'}
+                  label={incident.resolved ? 'Record resolved' : 'Record active'}
                 />
               </td>
             </tr>

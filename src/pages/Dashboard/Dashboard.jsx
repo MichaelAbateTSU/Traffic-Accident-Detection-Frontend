@@ -452,7 +452,7 @@ export default function Dashboard() {
       {activeIncidents.length > 0 && (
         <AlertBanner
           type="danger"
-          message={`${activeIncidents.length} open alarm-frame record${activeIncidents.length > 1 ? 's' : ''} on this page`}
+          message={`${activeIncidents.length} alarm-frame record${activeIncidents.length > 1 ? 's' : ''} with active record status on this page`}
           detail={activeIncidents.map((incident) => `${incident.cameraId} — ${incident.type}`).join(' · ')}
         />
       )}
@@ -494,19 +494,19 @@ export default function Dashboard() {
             description="YOLO inference service state"
           />
           <StatCard
-            label="Nonfailed-job Ratio"
+            label="Legacy Nonfailed-job Ratio"
             value={uptimePercent == null ? '—' : formatPercent(uptimePercent / 100, 2)}
             icon="JOB"
             variant="good"
             progressPercent={uptimePercent ?? 0}
-            description="Last 30 days: proportion of jobs not failed, including queued/running. Backend returns 100% when no jobs exist in the window; not measured system uptime."
+            description="Last 30 days: nonfailed jobs among at most 10,000 listed jobs (including queued/running), divided by all jobs in the window. Larger restored histories can undercount the numerator. Backend returns 100% for an empty window; not measured system uptime."
           />
         </section>
       </DataState>
 
       <SectionCard
         title="Recent Alarm Frames"
-        description={`Showing latest ${incidents.length} of ${totalRecentIncidents} open review records; review status does not indicate a current physical incident or live alarm.`}
+        description={`Showing latest ${incidents.length} of ${totalRecentIncidents} records with active status. Status is job-derived by default or manually overridden; it does not confirm review, accident resolution or a live alarm.`}
         action={<Link to="/incidents" className={styles.viewAll}>View all</Link>}
       >
         <IncidentTable
@@ -514,7 +514,7 @@ export default function Dashboard() {
           compact
           onRowClick={setSelectedIncident}
           selectedIncidentId={selectedIncident?.id ?? null}
-          emptyMessage="No open alarm-frame records in this dashboard window."
+          emptyMessage="No alarm-frame records with active status in this dashboard window."
         />
         {selectedIncident && (
           <div className={styles.incidentDetailWrap}>

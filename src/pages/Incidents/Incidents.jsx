@@ -137,7 +137,7 @@ export default function Incidents() {
           <span className={styles.subtitle}>One record per processed frame with a heuristic alarm; consecutive frames may be one episode, not unique or confirmed accidents. Scores (0-1) are not calibrated probabilities.</span>
         </div>
         <div className={styles.controls}>
-          <div className={styles.filterGroup} role="group" aria-label="Filter operator review status">
+          <div className={styles.filterGroup} role="group" aria-label="Filter record status">
             {['all', 'active', 'resolved'].map((filterOption) => (
               <button
                 key={filterOption}
@@ -147,7 +147,7 @@ export default function Incidents() {
                   setPage(1);
                 }}
               >
-                {filterOption === 'all' ? 'All records' : filterOption === 'active' ? 'Review open' : 'Review closed'}
+                {filterOption === 'all' ? 'All records' : filterOption === 'active' ? 'Record active' : 'Record resolved'}
               </button>
             ))}
           </div>
@@ -269,7 +269,7 @@ export default function Incidents() {
         )}
       </div>
 
-      <p>Review open/closed tracks operator review only; it does not mean a physical incident or live alarm is active or cleared.</p>
+      <p>Record status defaults to active while the job is pending/running and resolved when it finishes, unless manually overridden. Neither status confirms review, accident resolution or a live alarm.</p>
       <DataState loading={loading} error={error} onRetry={() => setRetryKey((v) => v + 1)} loadingMessage="Loading alarm-frame records...">
         <div className={styles.tableWrap}>
           <IncidentTable
