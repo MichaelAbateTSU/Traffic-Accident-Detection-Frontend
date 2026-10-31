@@ -95,6 +95,7 @@ https://frontend.integration.test:8454 {
                "-e", "no_proxy=127.0.0.1,localhost", "traffic-live-smoke",
                "python", "browser_serve.py")
         docker("run", "-d", "--name", "r2-browser-https", "--network", "container:r2-browser-api",
+               "--user", f"{os.getuid()}:{os.getgid()}",
                "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
                "--memory", "128m", "--memory-swap", "128m", "--pids-limit", "64",
                "--log-driver", "none", "--ulimit", "core=0",
@@ -119,6 +120,16 @@ https://frontend.integration.test:8454 {
             time.sleep(1)
         else:
             raise RuntimeError("Production model startup blocked")
+        stage = "trusted_test_https_health"
+        https_health = command(
+            "curl", "--noproxy", "*", "--fail", "--silent",
+            "--connect-timeout", "3", "--max-time", "5",
+            "--cacert", str(temp / "server.crt"),
+            "--resolve", "api.integration.test:8453:172.29.68.2",
+            "https://api.integration.test:8453/health", capture=True,
+        )
+        assert json.loads(https_health.stdout)["model_loaded"]
+        print(json.dumps({"temporary_ca_https_health_verified": True}), flush=True)
         stage = "actual_browser"
         browser = subprocess.Popen([
             "google-chrome", "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
