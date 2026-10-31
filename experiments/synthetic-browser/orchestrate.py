@@ -12,7 +12,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parent
 SOURCE = "https://media.githubusercontent.com/media/accidentbench/accidentbench.github.io/main/assets/videos/synthetic/Town03_head-on_clear_30.mp4"
-BACKEND = "21cb418e673fc944bbe2ca41bddf6d11b04c4b63"
+BACKEND = "fe2a06a64f9fb92ed6039f31040f53f2b3d158fb"
 FRONTEND = "f93f98f009799d7e72c42397a64042427a738682"
 CADDY = "caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
 environment = os.environ.copy()
@@ -44,6 +44,7 @@ try:
     with tempfile.TemporaryDirectory(prefix="r2-browser-", dir="/dev/shm", ignore_cleanup_errors=True) as temporary:
         temp = Path(temporary)
         environment["RESULT_FILE"] = str(temp / "result.json")
+        environment["TEST_CA_PATH"] = str(temp / "server.crt")
         stage = "temporary_https_setup"
         command("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
                 "-keyout", str(temp / "server.key"), "-out", str(temp / "server.crt"),
@@ -204,13 +205,13 @@ print(json.dumps({'source_sha256':digest.hexdigest(),'source_bytes':count,'direc
             }), flush=True)
             raise RuntimeError("Chrome debugging endpoint unavailable")
         result = command(
-            shutil.which("node"), str(ROOT / "browser.mjs"), capture=True, check=False, timeout=240,
+            shutil.which("python"), str(ROOT / "keyed_protocol.py"), capture=True, check=False, timeout=240,
         )
         safe = json.loads(result.stdout)
         print(json.dumps(safe | {
             "frontend_revision": FRONTEND, "backend_revision": BACKEND,
             "experiment_revision": os.environ["EXPERIMENT_REVISION"],
-            "browser_test_certificate_errors_ignored": True,
+            "protocol_test_certificate_verified": True,
             "public_deployment": False, "source": "ACCIDENT Town03_head-on_clear_30 synthetic, CC BY-NC-SA 4.0",
             "scorer_mode": "legacy",
         }), flush=True)
@@ -248,7 +249,7 @@ print(json.dumps({'temporary_artifact_files':artifact_files,**counts}))
             time.sleep(1)
         else:
             raise RuntimeError("Restart health failed")
-        recovery = command(shutil.which("node"), str(ROOT / "browser.mjs"), "recovery",
+        recovery = command(shutil.which("python"), str(ROOT / "keyed_protocol.py"), "recovery",
                            capture=True, check=False, timeout=120)
         print(json.dumps(json.loads(recovery.stdout)), flush=True)
         assert recovery.returncode==0
