@@ -5,6 +5,7 @@ import { createSubmissionResponseFault } from './submission_response_fault.mjs';
 import { createSparseReceiptFault } from './sparse_receipt_fault.mjs';
 import { createStaleJobDetailFault } from './stale_job_detail_fault.mjs';
 import { createStaleActiveListFault } from './stale_active_list_fault.mjs';
+import { createReceiptAttribution } from './receipt_attribution.mjs';
 
 const api = 'https://api.integration.test:8453';
 const frontend = 'https://frontend.integration.test:8454';
@@ -24,12 +25,9 @@ let sparseFault;
 let failOneLookup = false;
 let fulfilledLegacyLookups = 0;
 let legacyBoundary = false;
-let olderDetailFault, gatedIdentity, gatedLookupId;
+let olderDetailFault, attribution;
 let olderDetailVerified = false;
 let activeListFault, noSavedIdListVerified = false;
-let originalOrderingId;
-const otherListResponses = new Map();
-let otherListExpired = false;
 function container(script) {
   return JSON.parse(execFileSync('docker', ['exec', 'r2-browser-api', 'python', '-c', script],
     { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] }));
@@ -58,7 +56,7 @@ try {
     if (response.exceptionDetails) throw new Error('Actual browser evaluation failed');
     return response.result.value;
   };
-  const request = (path, key) => evaluate(`fetch(${JSON.stringify(api + path)}, {
+  const request = (path, key) => evaluate(`window.testDriverFetch(${JSON.stringify(api + path)}, {
     headers: {Authorization:${JSON.stringify(`Bearer ${token}`)}${key ? `,'Idempotency-Key':${JSON.stringify(key)}` : ''}}
   }).then(async response => ({status:response.status,body:await response.json()}))`);
   const loss = createSubmissionResponseFault(send, async key => {
@@ -83,42 +81,9 @@ try {
           await send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' });
           return;
         }
-        if (activeListFault && new URL(event.request.url).pathname === '/jobs' &&
-            event.request.method === 'GET' && gatedIdentity) {
-          if (event.responseStatusCode == null) {
-            await send('Fetch.continueRequest', { requestId: event.requestId, interceptResponse: true });
-            return;
-          }
-          if (event.responseStatusCode === 200) {
-            const payload = await send('Fetch.getResponseBody', { requestId: event.requestId });
-            const list = JSON.parse(payload.base64Encoded ?
-              Buffer.from(payload.body, 'base64').toString('utf8') : payload.body);
-            if (list.data?.some(job=>job.job_id === originalOrderingId)) {
-              const status = new URL(event.request.url).searchParams.get('status');
-              if (!activeListFault.held && ['pending', 'running'].includes(status)) {
-                await activeListFault.paused(event);
-                return;
-              }
-              const timer = setTimeout(() => {
-                otherListExpired = true;
-                otherListResponses.delete(event.requestId);
-                send('Fetch.continueResponse', { requestId: event.requestId })
-                  .catch(error=>interceptionFailures.push(error.name));
-              }, 20000);
-              otherListResponses.set(event.requestId, timer);
-              return;
-            }
-          }
-          await send('Fetch.continueResponse', { requestId: event.requestId });
-          return;
-        }
+        if (attribution && await attribution.paused(event)) return;
         if (event.request.url === `${api}/detection-submissions/v1` &&
             event.request.method === 'GET' && event.responseStatusCode == null) {
-          if (gatedIdentity) {
-            assert.equal(gatedLookupId, undefined);
-            gatedLookupId = event.requestId;
-            return;
-          }
           if (legacyBoundary) {
             fulfilledLegacyLookups++;
             await send('Fetch.fulfillRequest', { requestId: event.requestId, responseCode: 404,
@@ -144,6 +109,12 @@ try {
         if (error.message.includes('Invalid InterceptionId')) cancelled++;
         else interceptionFailures.push(error.name);
       });
+    } else if (message.method === 'Runtime.bindingCalled' && message.params.name === 'receiptAttributionEvent') {
+      try {
+        attribution?.observed(JSON.parse(message.params.payload));
+      } catch (error) {
+        interceptionFailures.push(error.name);
+      }
     } else if (message.method === 'Runtime.exceptionThrown') {
       exceptions++;
     } else if (message.method === 'Network.requestWillBeSent') {
@@ -255,8 +226,10 @@ try {
   await send('Network.enable');
   await send('Network.setCacheDisabled', { cacheDisabled: true });
   await send('Page.enable');
+  await send('Runtime.addBinding', { name: 'receiptAttributionEvent' });
   await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
     const original=window.fetch;
+    window.testDriverFetch=original.bind(window);
     const blobs=new WeakMap();
     window.currentObjectUrlSources=new Map();
     const create=URL.createObjectURL.bind(URL),revoke=URL.revokeObjectURL.bind(URL);
@@ -271,9 +244,19 @@ try {
     };
     window.submissionTransportObservation={statuses:[],rejections:0};
     window.fetch=async function(input,options) {
+      const fullMatch=String(input).match(/^${api.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\//g, '\\/')}\\/jobs\\/([^/?]+)$/);
+      if(fullMatch)window.receiptAttributionEvent(JSON.stringify({type:'application-full-read',jobId:decodeURIComponent(fullMatch[1])}));
       const submission=String(input).endsWith('/detection-submissions/v1')&&options?.method==='POST';
       try {
         const response=await original.apply(this,arguments);
+        if(String(input)===${JSON.stringify(`${api}/detection-submissions/v1`)} && (!options?.method||options.method==='GET')) {
+          const json=response.json.bind(response),key=new Headers(options?.headers).get('Idempotency-Key');
+          response.json=async function() {
+            const body=await json();
+            window.receiptAttributionEvent(JSON.stringify({type:'receipt-consumed',key,jobId:body.job_id,status:body.status}));
+            return body;
+          };
+        }
         if(String(input).startsWith(${JSON.stringify(`${api}/artifacts/`)})) {
           const blob=response.blob.bind(response);
           const authenticated=new Headers(options?.headers).get('Authorization')===${JSON.stringify(`Bearer ${token}`)};
@@ -323,7 +306,6 @@ try {
       const originalReceipt = await request('/detection-submissions/v1', originalKey);
       assert.equal(originalReceipt.status, 200);
       const originalId = originalReceipt.body.job_id;
-      originalOrderingId = originalId;
       const withoutSavedId = orderingCase === 'uncertain-no-id-list';
       await seedUncertainIdentity(originalKey, originalId, !withoutSavedId);
       if (withoutSavedId) {
@@ -334,14 +316,15 @@ try {
       if (withoutSavedId) activeListFault = createStaleActiveListFault(send, api, originalId);
       else olderDetailFault = createStaleJobDetailFault(send, api, originalId);
       const orderingFault = activeListFault || olderDetailFault;
-      gatedIdentity = originalKey;
+      attribution = createReceiptAttribution(send, api, originalKey, originalId, withoutSavedId);
       await navigateAwayAndBack();
       const captureDeadline = Date.now() + 10000;
-      while ((!orderingFault.held || !gatedLookupId) && Date.now() < captureDeadline) {
+      while (((withoutSavedId ? !attribution.activeSnapshotHeld : !orderingFault.held) || !attribution.requestId) && Date.now() < captureDeadline) {
         await new Promise(resolve => setTimeout(resolve, 25));
       }
-      assert.equal(orderingFault.held, true, 'Actual active response could not be captured in time');
-      assert.ok(gatedLookupId);
+      if (!withoutSavedId) assert.equal(orderingFault.held, true, 'Actual active response could not be captured in time');
+      else assert.equal(attribution.activeSnapshotHeld, true);
+      assert.ok(attribution.requestId);
       container("from pathlib import Path; Path('/tmp/synthetic-detail-gate-release').touch(); print('{}')");
       const completeDeadline = Date.now() + 12000;
       let genuineComplete = false;
@@ -353,8 +336,21 @@ try {
       assert.equal(genuineComplete, true, 'Genuine inference exceeded bounded detail interleaving');
       if (withoutSavedId) assert.equal(fullJobRequests.get(`${api}/jobs/${originalId}`) || 0, beforeFullReads,
         'A listing revealed the job identity before its terminal receipt');
-      gatedIdentity = undefined;
-      await send('Fetch.continueRequest', { requestId: gatedLookupId });
+      await attribution.releaseRequest();
+      const responseDeadline = Date.now() + 5000;
+      while (!attribution.verified && Date.now() < responseDeadline) await new Promise(resolve=>setTimeout(resolve,25));
+      assert.equal(attribution.verified, true);
+      if (withoutSavedId) {
+        assert.deepEqual(await evaluate(`JSON.parse(localStorage.getItem(${JSON.stringify(`tad_monitor:${api}`)})).ids`), []);
+        assert.equal(await evaluate(`${journalExpression}.batches.flatMap(b=>b.entries)[0].jobId`), null);
+      }
+      await attribution.deliverResponse();
+      const consumeDeadline = Date.now() + 5000;
+      while ((!attribution.consumed || withoutSavedId && !attribution.fullRead) && Date.now() < consumeDeadline) {
+        await new Promise(resolve=>setTimeout(resolve,25));
+      }
+      assert.equal(attribution.consumed, true);
+      if (withoutSavedId) assert.equal(attribution.fullRead, true);
       await wait(`${cardExpression(originalId)}?.textContent.includes("Status: done")`, 5000);
       await evaluate(`(() => {
         window.terminalRegressions=[];
@@ -366,13 +362,9 @@ try {
         window.terminalObserver.observe(document.body,{subtree:true,childList:true,characterData:true});
         inspect();
       })()`);
-      await orderingFault.release();
-      assert.equal(otherListExpired, false);
-      for (const [requestId, timer] of otherListResponses) {
-        clearTimeout(timer);
-        await send('Fetch.continueResponse', { requestId });
-      }
-      otherListResponses.clear();
+      if (!withoutSavedId) await orderingFault.release();
+      await attribution.releaseLists();
+      attribution = undefined;
       await orderingFault.cleanup();
       olderDetailFault = undefined;
       activeListFault = undefined;
@@ -545,9 +537,6 @@ try {
   await sparseFault?.cleanup();
   await olderDetailFault?.cleanup();
   await activeListFault?.cleanup();
-  for (const [requestId, timer] of otherListResponses) {
-    clearTimeout(timer);
-    await send('Fetch.continueResponse', { requestId });
-  }
+  await attribution?.cleanup();
   ws?.close();
 }
