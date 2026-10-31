@@ -54,7 +54,7 @@ try:
 }
 https://api.integration.test:8453 {
   tls /certs/server.crt /certs/server.key
-  reverse_proxy 127.0.0.1:8000
+  reverse_proxy r2-browser-api:8000
 }
 https://frontend.integration.test:8454 {
   tls /certs/server.crt /certs/server.key
@@ -95,7 +95,9 @@ https://frontend.integration.test:8454 {
                "-e", "http_proxy=http://egress:3128", "-e", "https_proxy=http://egress:3128",
                "-e", "no_proxy=127.0.0.1,localhost", "traffic-live-smoke",
                "python", "browser_serve.py")
-        docker("run", "-d", "--name", "r2-browser-https", "--network", "container:r2-browser-api",
+        docker("create", "--name", "r2-browser-https", "--network", "r2-browser-private",
+               "--ip", "172.29.68.3",
+               "-p", "127.0.0.1:8453:8453", "-p", "127.0.0.1:8454:8454",
                "--user", f"{os.getuid()}:{os.getgid()}",
                "--read-only", "--cap-drop", "ALL", "--cap-add", "NET_BIND_SERVICE",
                "--security-opt", "no-new-privileges",
@@ -106,6 +108,8 @@ https://frontend.integration.test:8454 {
                "--mount", f"type=bind,source={temp / 'Caddyfile'},target=/etc/caddy/Caddyfile,readonly",
                "--mount", f"type=bind,source={Path.cwd() / 'frontend/dist'},target=/frontend,readonly",
                CADDY)
+        docker("network", "connect", "r2-browser-internet", "r2-browser-https")
+        docker("start", "r2-browser-https")
         state = json.loads(docker("inspect", "r2-browser-api", capture=True).stdout)[0]
         assert state["HostConfig"]["ReadonlyRootfs"]
         assert state["HostConfig"]["LogConfig"]["Type"] == "none"
@@ -124,7 +128,6 @@ https://frontend.integration.test:8454 {
             raise RuntimeError("Production model startup blocked")
         stage = "trusted_test_https_health"
         https_health = command(
-            "sudo", "--non-interactive", "nsenter", "--target", str(state["State"]["Pid"]), "--net",
             "curl", "--noproxy", "*", "--fail", "--silent",
             "--connect-timeout", "3", "--max-time", "5",
             "--cacert", str(temp / "server.crt"),
@@ -135,11 +138,10 @@ https://frontend.integration.test:8454 {
         print(json.dumps({"temporary_ca_https_health_verified": True}), flush=True)
         stage = "actual_browser"
         browser = subprocess.Popen([
-            "sudo", "--non-interactive", "nsenter", "--target", str(state["State"]["Pid"]), "--net",
-            "--setuid", str(os.getuid()), "--setgid", str(os.getgid()),
             "google-chrome", "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
             "--disable-gpu", "--no-proxy-server", "--ignore-certificate-errors",
             "--disable-background-networking", "--disable-breakpad", "--disable-crash-reporter",
+            "--no-first-run", "--no-default-browser-check",
             "--disk-cache-size=0", "--media-cache-size=0",
             "--host-resolver-rules=MAP frontend.integration.test 127.0.0.1, MAP api.integration.test 127.0.0.1",
             "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=9225",
@@ -147,7 +149,6 @@ https://frontend.integration.test:8454 {
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
         for attempt in range(30):
             readiness = command(
-                "sudo", "--non-interactive", "nsenter", "--target", str(state["State"]["Pid"]), "--net",
                 "curl", "--noproxy", "*", "--fail", "--silent", "--max-time", "1", "http://127.0.0.1:9225/json/version",
                 check=False, capture=True,
             )
@@ -158,8 +159,6 @@ https://frontend.integration.test:8454 {
             print(json.dumps({"chrome_startup_exit_code": browser.poll()}), flush=True)
             raise RuntimeError("Chrome debugging endpoint unavailable")
         result = command(
-            "sudo", "--non-interactive", "--preserve-env=API_TOKEN", "nsenter",
-            "--target", str(state["State"]["Pid"]), "--net",
             shutil.which("node"), str(ROOT / "browser.mjs"), capture=True, check=False, timeout=240,
         )
         safe = json.loads(result.stdout)
@@ -199,11 +198,11 @@ except Exception as error:
     raise SystemExit(1)
 finally:
     if browser:
-        command("sudo", "--non-interactive", "kill", "-TERM", str(browser.pid), check=False)
+        browser.terminate()
         try:
             browser.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            command("sudo", "--non-interactive", "kill", "-KILL", str(browser.pid), check=False)
+            browser.kill()
             browser.wait(timeout=5)
     docker("rm", "-f", "-v", "r2-browser-https", "r2-browser-api", "r2-browser-egress", check=False)
     docker("network", "rm", "r2-browser-private", "r2-browser-internet", check=False)
