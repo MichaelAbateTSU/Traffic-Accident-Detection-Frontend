@@ -1,9 +1,10 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 const TRIMMED_API_BASE = API_BASE.endsWith('/') ? API_BASE.slice(0, -1) : API_BASE;
+const API_ORIGIN = TRIMMED_API_BASE.match(/^(?:[a-z][a-z\d+\-.]*:)?\/\/[^/?#]+/i)?.[0] ?? '';
 
 /**
  * Backend artifact URLs are rooted at the API host (e.g. "/artifacts/<job>/...").
- * Prefix them with the API base so <img> tags work when the UI is served from another origin.
+ * Root-relative paths use the API origin; relative paths use the full API base.
  */
 export function resolveAssetUrl(url) {
   if (url === undefined || url === null || url === '') return null;
@@ -11,7 +12,7 @@ export function resolveAssetUrl(url) {
   if (/^(?:[a-z][a-z\d+\-.]*:)?\/\//i.test(value) || value.startsWith('data:') || value.startsWith('blob:')) {
     return value;
   }
-  return `${TRIMMED_API_BASE}${value.startsWith('/') ? '' : '/'}${value}`;
+  return value.startsWith('/') ? `${API_ORIGIN}${value}` : `${TRIMMED_API_BASE}/${value}`;
 }
 
 const SORT_REMAP = {

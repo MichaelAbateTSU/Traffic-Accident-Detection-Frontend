@@ -201,7 +201,9 @@ export default function CameraView() {
             </a>
           ) : (
             <span className={styles.latestFrameEmpty}>
-              {latestFrameError ? 'Unable to load latest frame' : 'No processed frames yet'}
+              {latestFrameError
+                ? 'Unable to load latest frame'
+                : 'No saved frames yet. Enable Save frames in the Dashboard before starting a detection job to see the latest frame for this camera.'}
             </span>
           )}
           {latestFrame && (

@@ -100,6 +100,7 @@ export default function Dashboard() {
   const [startingJob, setStartingJob] = useState(false);
   const [monitoredJobs, setMonitoredJobs] = useState([]);
   const [jobError, setJobError] = useState(null);
+  const [jobSubmissionError, setJobSubmissionError] = useState(null);
   const [selectedIncident, setSelectedIncident] = useState(null);
   const totalFixedCameras = FIXED_CAMERA_STREAM_URLS.length;
   const pollingTimerRef = useRef(null);
@@ -205,11 +206,12 @@ export default function Dashboard() {
     setStartingJob(true);
     stopBatchPolling();
     setJobError(null);
+    setJobSubmissionError(null);
+    monitoredJobsRef.current = [];
     setMonitoredJobs([]);
 
+    const queuedResponses = [];
     try {
-      const queuedResponses = [];
-
       for (const streamUrl of FIXED_CAMERA_STREAM_URLS) {
         const { item } = await startDetectionJob({
           stream_url: streamUrl,
@@ -231,18 +233,23 @@ export default function Dashboard() {
       if (!queuedResponses.length) {
         throw new Error('No jobs were started.');
       }
-
-      monitoredJobsRef.current = queuedResponses;
-      setMonitoredJobs(queuedResponses);
-      refreshPendingJobs();
-      pollingTimerRef.current = setInterval(() => {
-        refreshPendingJobs();
-      }, JOB_POLL_INTERVAL_MS);
-      reload();
     } catch (err) {
       console.error(err);
-      setJobError(err.message);
+      setJobSubmissionError(queuedResponses.length
+        ? `${queuedResponses.length} of ${totalFixedCameras} jobs started; submission stopped: ${err.message}`
+        : err.message);
     } finally {
+      if (queuedResponses.length) {
+        monitoredJobsRef.current = queuedResponses;
+        setMonitoredJobs(queuedResponses);
+        if (queuedResponses.some((jobItem) => !isTerminalStatus(jobItem.status))) {
+          pollingTimerRef.current = setInterval(() => {
+            refreshPendingJobs();
+          }, JOB_POLL_INTERVAL_MS);
+          refreshPendingJobs();
+        }
+        reload();
+      }
       setStartingJob(false);
     }
   }
@@ -295,9 +302,10 @@ export default function Dashboard() {
       healthMeta: healthMeta?.raw ?? healthMeta ?? null,
       dashboardError: error ?? null,
       monitorError: jobError ?? null,
+      submissionError: jobSubmissionError ?? null,
     };
     return JSON.stringify(payload, null, 2);
-  }, [stats, incidents, cameras, health, jobs, monitoredJobs, overviewMeta, incidentsMeta, jobsMeta, healthMeta, error, jobError]);
+  }, [stats, incidents, cameras, health, jobs, monitoredJobs, overviewMeta, incidentsMeta, jobsMeta, healthMeta, error, jobError, jobSubmissionError]);
   const recentJobsApiExample = useMemo(() => {
     if (!jobs.length) return null;
     const sample = jobs
@@ -429,9 +437,12 @@ export default function Dashboard() {
 
         <p className={styles.monitorHint}>
           Jobs are queued as <strong>pending</strong>, advance to <strong>running</strong> as processing begins, then end as
-          <strong>complete</strong> or <strong>failed</strong>. Frame images appear progressively while polling.
+          <strong>complete</strong> or <strong>failed</strong>. Enable <strong>Save frames</strong> before starting a job
+          to see saved frame images here and the latest detection frame in the camera view. With Save frames enabled,
+          images appear progressively while polling; unchecked jobs do not save images.
         </p>
 
+        {jobSubmissionError && <AlertBanner type="warning" message="Job submission error" detail={jobSubmissionError} />}
         {jobError && <AlertBanner type="warning" message="Job monitor error" detail={jobError} />}
 
         {monitoredJobs.length > 0 && (

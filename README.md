@@ -67,7 +67,9 @@ src/
 
 ## Backend API
 
-`src/services/api.js` wraps the backend's `{ data, meta, error }` envelope and maps snake_case payloads to UI-friendly objects. Root-relative artifact URLs returned by the backend (e.g. `/artifacts/<job>/capture/000001.jpg`) are resolved against the API base URL, so frame images load even when the UI runs on a different origin than the API.
+`src/services/api.js` wraps the backend's `{ data, meta, error }` envelope and maps snake_case payloads to UI-friendly objects. Root-relative artifact URLs returned by the backend (e.g. `/artifacts/<job>/capture/000001.jpg`) are resolved against the API origin, so frame images load even when the UI runs on a different origin than the API. With `VITE_API_BASE_URL=http://host:8000/api/v1`, `/api/v1/artifacts/...` resolves to `http://host:8000/api/v1/artifacts/...` without duplicating the prefix. Relative artifact paths use the full API base; absolute, protocol-relative, data, and blob URLs are unchanged. A relative API base keeps root-relative artifact paths on the UI's origin.
+
+Run the focused API URL and Dashboard job-submission regression checks with `npm test` (Node's VM modules flag supplies Vite's environment and isolated UI dependencies to the test modules; Node may emit an experimental-feature warning).
 
 | Function | Endpoint |
 |---|---|
@@ -85,9 +87,10 @@ src/
 
 ### Operator workflows
 
-- **Resolve / reopen incidents** — the incident detail panel (Dashboard and Incidents pages) has *Mark resolved* / *Reopen incident* buttons and an operator note (max 500 characters). Changes are persisted by the backend and reflected in lists, the dashboard, and CSV exports.
+- **Detection job batches** — the Dashboard retains and monitors jobs already accepted if a later camera submission fails. A separate submission warning reports the partial failure and remains visible during successful polling, until another batch is started.
+- **Resolve / reopen incidents** — the incident detail panel (Dashboard and Incidents pages) has *Mark resolved* / *Reopen incident* buttons and an operator note (max 500 characters). Changes are held in backend memory and reflected in lists, the dashboard, and CSV exports while the associated job is retained. They are lost when the backend restarts or the job expires; they are not durably persisted.
 - **Export incidents** — the *Export CSV* button on the Incidents page downloads every incident matching the current filters and sort order.
-- **Latest detection frame** — the single-camera view (`/camera/:id`) shows the most recent annotated frame produced for that camera, refreshed every 10 seconds.
+- **Saved / latest detection frames** — enable *Save frames* in the Dashboard's Detection Job Monitor before starting a job to see saved frame images. The single-camera view (`/camera/:id`) shows the most recent saved annotated frame for that camera, refreshed every 10 seconds. Save frames is unchecked by default: jobs started with `save_frames=false` still run detection but produce no frame images.
 
 ## Pages
 
