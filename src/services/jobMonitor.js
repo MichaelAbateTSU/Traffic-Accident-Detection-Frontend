@@ -212,6 +212,7 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
         recovered.set(id, {
           ...(['complete', 'failed'].includes(previous?.status) && ['pending', 'running'].includes(item.status) ? previous : item),
           recoveringRead: false, recoveryDeferred: false, admissionStatusUnknown: false,
+          submissionReceiptOnly: false,
         });
       } catch (error) {
         if (error.name === 'AbortError') {
@@ -250,9 +251,9 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
         if (typeof item.id !== 'string' || !JOB_REFERENCE.test(item.id)) {
           throw new Error('Backend listed an invalid job identity. Original recovery references are retained; new submissions remain blocked.');
         }
-        listings.set(item.id, item);
         const previous = recovered.get(item.id);
         if (previous && ['complete', 'failed'].includes(previous.status) && ['pending', 'running'].includes(item.status)) continue;
+        listings.set(item.id, item);
         if (!previous || previous.recoveringRead || errors.has(item.id)) {
           recovered.set(item.id, { ...item, recoveringRead: false, recoveryDeferred: false, admissionStatusUnknown: false });
           errors.delete(item.id);
@@ -280,7 +281,10 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
           const previous = recovered.get(item.id);
           const active = ['pending', 'running'].includes(item.status);
           if (!previous || !['complete', 'failed'].includes(previous.status)) {
-            recovered.set(item.id, { ...previous, ...item, recoveringRead: !active, recoveryDeferred: false, admissionStatusUnknown: false, monitorError: null });
+            recovered.set(item.id, {
+              ...(previous && item.submissionReceiptOnly ? { ...item, ...previous, id: item.id, status: item.status } : { ...previous, ...item }),
+              recoveringRead: !active, recoveryDeferred: false, admissionStatusUnknown: false, monitorError: null,
+            });
           }
           emit([recovered.get(item.id)]);
           if (!active) acceptedReads.push(item.id);
@@ -289,7 +293,7 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
       ...['pending', 'running'].map(listStatus),
     ]);
     const readHistory = async (id) => {
-      if (listings.has(id) || reads.has(id)) return;
+      if ((listings.has(id) && !['complete', 'failed'].includes(recovered.get(id)?.status)) || reads.has(id)) return;
       if (historyExpired) {
         const message = `Historical job ${id} read deferred after the recovery deadline. Reference retained; outcome unknown. Retry historical recovery explicitly.`;
         errors.set(id, message);

@@ -450,7 +450,7 @@ for (const status of ['complete', 'failed']) {
     const read = deferred();
     const { api, clock, storage } = await monitorHarness({
       saved: { ids: ['original-fallback'] },
-      getSubmission: async () => ({ item: { id: 'original-fallback', status, framesProcessed: 120 } }),
+      getSubmission: async () => ({ item: { id: 'original-fallback', status, submissionReceiptOnly: true, frames: [], framesProcessed: null } }),
       getJob: () => read.promise,
       getJobs: async (query) => query.status === 'running' ? listing.promise : { items: [] },
     });
@@ -472,7 +472,7 @@ for (const status of ['complete', 'failed']) {
     else read.resolve({ item: { id: 'original-fallback', status: 'pending', framesProcessed: 0 } });
     await harness.flush();
     assert.equal(card().status, status);
-    assert.equal(card().framesProcessed, 120);
+    assert.equal(card().framesProcessed, null);
     assert.equal(submissions.length, 0);
     assert.equal(clock.timers.size, 0);
     harness.unmount();
@@ -559,6 +559,60 @@ test('delayed active receipt resumes Dashboard polling before two stale history 
   await harness.flush();
   assert.equal(clock.timers.size, 0);
 });
+
+for (const priorFullPoll of [false, true]) {
+  test(`sparse terminal receipt preserves full result details despite stale listing (${priorFullPoll ? 'late receipt after poll' : 'unsaved receipt'})`, async () => {
+    const receipt = deferred();
+    const listing = deferred();
+    let reads = 0;
+    const full = {
+      id: 'result-original', status: 'complete', framesProcessed: 120, peakConfidence: 0.87,
+      eventCount: 1, accidentDetected: true, completedAt: '2026-10-31T22:00:00Z',
+      events: [{ id: 'event-original', confidence: 0.87 }],
+      frames: [{ frame_index: 1, capture: 'https://backend.example/artifacts/original/frame.jpg' }],
+    };
+    const { api, storage } = await monitorHarness({
+      getSubmission: () => receipt.promise,
+      getJobs: async (query) => query.status === 'running' ? listing.promise : { items: [] },
+      getJob: async () => { reads++; return { item: full }; },
+    });
+    const dependencies = journalDependencies({ storage });
+    const journal = dependencies.createSubmissionJournal();
+    const batch = await journal.prepareBatch(['source'], {
+      maxFrames: 120, saveFrames: false, sourceKind: 'fixed-camera', protocol: 'keyed-v1',
+    });
+    journal.markSending(batch.entries[0].key);
+    const { harness, submissions } = await dashboardHarness(api.recoverJobMonitor, api.getMonitoredJob, { journal: dependencies });
+    harness.render();
+    await harness.flush();
+    if (priorFullPoll) {
+      listing.resolve({ items: [{ id: 'result-original', status: 'running' }] });
+      await harness.flush();
+      assert.equal(reads, 1);
+    }
+    receipt.resolve({ item: {
+      id: 'result-original', status: 'complete', submissionReceiptOnly: true,
+      frames: [], events: [], framesProcessed: null, peakConfidence: null, eventCount: 0,
+      accidentDetected: null, completedAt: null,
+    } });
+    await harness.flush();
+    if (!priorFullPoll) listing.resolve({ items: [{ id: 'result-original', status: 'running', framesProcessed: 1 }] });
+    await harness.flush();
+    const job = harness.elements.find((item) => item.type === 'JobStatusCard').props.job;
+    assert.equal(job.status, 'complete');
+    assert.equal(job.framesProcessed, 120);
+    assert.equal(job.peakConfidence, 0.87);
+    assert.equal(job.eventCount, 1);
+    assert.equal(job.accidentDetected, true);
+    assert.equal(job.completedAt, full.completedAt);
+    assert.equal(job.events.length, 1);
+    assert.equal(job.frames.length, 1);
+    assert.ok(JSON.stringify(job.frames).includes('frame.jpg'));
+    assert.ok(reads >= 1);
+    assert.equal(submissions.length, 0);
+    harness.unmount();
+  });
+}
 
 test('Dashboard does not poll the deferred history queue and its read-only retry restores those references', async () => {
   let responsive = false;

@@ -188,7 +188,7 @@ test('root-relative legacy UUID records migrate atomically without retroactive k
   assert.ok(data.has('tad_submissions:v1:https://frontend.example/api'));
 });
 
-async function dashboard(journal, { post = async () => ({ item: { id: 'accepted', status: 'pending' } }), recovered = [], configurationError = null, saveJobMonitor = () => {}, globals = {} } = {}) {
+async function dashboard(journal, { post = async () => ({ item: { id: 'accepted', status: 'pending' } }), recovered = [], configurationError = null, saveJobMonitor = () => {}, getJob = async (id) => ({ item: { id, status: 'complete' } }), globals = {} } = {}) {
   const sent = [];
   const sentKeys = [];
   const harness = await componentHarness('../src/pages/Dashboard/Dashboard.jsx', {
@@ -203,7 +203,7 @@ async function dashboard(journal, { post = async () => ({ item: { id: 'accepted'
     '../../services/jobMonitor.js': {
       beginJobSubmission() {}, endJobSubmission() {}, saveJobMonitor,
       recoverJobMonitor: async () => ({ jobs: recovered, warning: null }),
-      getMonitoredJob: async (id) => ({ item: { id, status: 'complete' } }),
+      getMonitoredJob: getJob,
     },
     '../../hooks/useDashboardData.js': { useDashboardData: () => ({ incidents: [], cameras: [], jobs: [], reload() {} }) },
     '../../utils/formatters.js': { formatDateTime: String, formatNumber: String, formatPercent: String },
@@ -415,6 +415,61 @@ test('late admission-failure identity is retained after unmount without submitti
   assert.equal(api.read().batches[0].entries[0].jobId, 'admission-original');
   assert.deepEqual(saved.at(-1).ids, ['admission-original']);
   assert.equal(view.sent.length, 1);
+});
+
+test('explicit sparse terminal replay loads full details and cannot erase an existing terminal result', async () => {
+  for (const existing of [false, true]) {
+    const { api } = journalHarness();
+    const batch = await api.prepareBatch([payload.stream_url], options);
+    const key = batch.entries[0].key;
+    api.markSending(key);
+    const full = {
+      id: 'replay-full', status: 'complete', framesProcessed: 120, peakConfidence: 0.87,
+      eventCount: 1, events: [{ id: 'event' }],
+      frames: [{ frame_index: 1, capture: 'https://backend.example/artifacts/replay/frame.jpg' }],
+    };
+    const view = await dashboard(api, {
+      recovered: existing ? [full] : [],
+      post: async () => ({ item: {
+        id: 'replay-full', status: 'complete', submissionReceiptOnly: true,
+        framesProcessed: null, peakConfidence: null, eventCount: 0, frames: [], events: [],
+      } }),
+      getJob: async () => ({ item: full }),
+    });
+    view.harness.elements.find((item) => item.props.id === `replay-${key}`).props.onChange({ target: { value: payload.stream_url } });
+    await view.harness.flush();
+    await view.harness.elements.find((item) => item.props.children === 'Submit original request with same key').props.onClick();
+    await view.harness.flush();
+    const job = view.harness.elements.find((item) => item.type === 'JobStatusCard').props.job;
+    assert.equal(job.framesProcessed, 120);
+    assert.equal(job.peakConfidence, 0.87);
+    assert.equal(job.eventCount, 1);
+    assert.equal(job.events.length, 1);
+    assert.ok(JSON.stringify(job.frames).includes('frame.jpg'));
+    assert.equal(view.sent.length, 1);
+    view.harness.unmount();
+  }
+});
+
+test('terminal replay detail 404 keeps terminal status and offers explicit read-only result recovery', async () => {
+  const { api } = journalHarness();
+  const batch = await api.prepareBatch([payload.stream_url], options);
+  const key = batch.entries[0].key;
+  api.markSending(key);
+  const view = await dashboard(api, {
+    post: async () => ({ item: { id: 'expired-detail', status: 'complete', submissionReceiptOnly: true } }),
+    getJob: async () => { throw Object.assign(new Error('Result unavailable'), { status: 404 }); },
+  });
+  view.harness.elements.find((item) => item.props.id === `replay-${key}`).props.onChange({ target: { value: payload.stream_url } });
+  await view.harness.flush();
+  await view.harness.elements.find((item) => item.props.children === 'Submit original request with same key').props.onClick();
+  await view.harness.flush();
+  const job = view.harness.elements.find((item) => item.type === 'JobStatusCard').props.job;
+  assert.equal(job.status, 'complete');
+  assert.match(job.monitorError, /Result unavailable/);
+  assert.ok(view.harness.elements.find((item) => item.props.children === 'Retry job result recovery (read only)'));
+  assert.equal(view.sent.length, 1);
+  view.harness.unmount();
 });
 
 test('acceptance during asynchronous replay validation cannot return a stale replay authorization', async () => {

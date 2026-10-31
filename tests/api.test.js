@@ -263,6 +263,7 @@ test('keyed submissions and key-only recovery use the verified endpoint and exac
   api.setOperatorToken('dummy-operator-token');
   const accepted = await api.submitDetection(submissionPayload, { key: submissionKey });
   assert.equal(accepted.item.id, 'original-job');
+  assert.equal(accepted.item.submissionReceiptOnly, true);
   assert.equal(accepted.replayed, false);
   replayed = true;
   const replay = await api.submitDetection(submissionPayload, { key: submissionKey });

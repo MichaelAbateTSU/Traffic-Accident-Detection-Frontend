@@ -675,7 +675,7 @@ function submissionReceipt(data, status, { key, lookup = false, admissionFailed 
       status, code: 'invalid_submission_receipt',
     });
   }
-  return { item: mapJobApiToUi(data), replayed: data.replayed, expiresAt: expiry, admissionFailed };
+  return { item: { ...mapJobApiToUi(data), submissionReceiptOnly: true }, replayed: data.replayed, expiresAt: expiry, admissionFailed };
 }
 
 export async function submitDetection(payload, { key, signal } = {}) {
