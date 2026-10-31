@@ -81,13 +81,13 @@ try {
               body: Buffer.from(JSON.stringify({ detail: 'Not Found' })).toString('base64') });
             return;
           }
-          if (olderDetailFault && await olderDetailFault.paused(event)) return;
           if (failOneLookup) {
             failOneLookup = false;
             await send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'ConnectionClosed' });
             return;
           }
         }
+        if (olderDetailFault && await olderDetailFault.paused(event)) return;
         if (sparseFault && await sparseFault.paused(event)) return;
         if (phase === 'initial' && await loss.paused(event)) return;
         await send(event.responseStatusCode == null ? 'Fetch.continueRequest' : 'Fetch.continueResponse',
