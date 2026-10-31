@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import AuthenticatedImage from '../AuthenticatedImage/AuthenticatedImage.jsx';
 import { formatDateTime, formatPercent } from '../../utils/formatters.js';
 import StatusBadge from '../StatusBadge/StatusBadge.jsx';
 import styles from './JobStatusCard.module.css';
@@ -21,26 +21,20 @@ function getDisplayStatus(status) {
 }
 
 function FrameImageTile({ label, src, alt }) {
-  const [failed, setFailed] = useState(false);
-  const hasImage = Boolean(src) && !failed;
+  const hasImage = Boolean(src);
 
   return (
     <div className={styles.frameTile}>
       <div className={styles.frameTileLabelRow}>
         <span className={styles.frameTileLabel}>{label}</span>
-        {src && (
-          <a href={src} target="_blank" rel="noreferrer" className={styles.frameTileLink}>
-            Open
-          </a>
-        )}
       </div>
       {hasImage ? (
-        <img
+        <AuthenticatedImage
           src={src}
           alt={alt}
           className={styles.frameTileImage}
           loading="lazy"
-          onError={() => setFailed(true)}
+          openLink
         />
       ) : (
         <div className={styles.frameTileFallback}>Unavailable</div>
@@ -95,11 +89,6 @@ export default function JobStatusCard({ job }) {
       {job.streamUrl && (
         <a href={job.streamUrl} target="_blank" rel="noreferrer" className={styles.link}>
           Open stream
-        </a>
-      )}
-      {job.artifactsBaseUrl && (
-        <a href={job.artifactsBaseUrl} target="_blank" rel="noreferrer" className={styles.link}>
-          Open artifacts
         </a>
       )}
       <section className={styles.framesSection} aria-label="Job frame images">

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import AuthenticatedImage from '../../components/AuthenticatedImage/AuthenticatedImage.jsx';
 import StatCard from '../../components/StatCard/StatCard.jsx';
 import IncidentTable from '../../components/IncidentTable/IncidentTable.jsx';
 import AlertBanner from '../../components/AlertBanner/AlertBanner.jsx';
@@ -489,19 +490,19 @@ export default function Dashboard() {
                     <figure>
                       <figcaption>Original</figcaption>
                       {frame.capture ? (
-                        <img src={frame.capture} alt={`Frame ${frame.frameIndex} original`} loading="lazy" />
+                        <AuthenticatedImage src={frame.capture} alt={`Frame ${frame.frameIndex} original`} loading="lazy" openLink />
                       ) : <div>No image</div>}
                     </figure>
                     <figure>
                       <figcaption>Annotated</figcaption>
                       {frame.captureAnnotated ? (
-                        <img src={frame.captureAnnotated} alt={`Frame ${frame.frameIndex} annotated`} loading="lazy" />
+                        <AuthenticatedImage src={frame.captureAnnotated} alt={`Frame ${frame.frameIndex} annotated`} loading="lazy" openLink />
                       ) : <div>No image</div>}
                     </figure>
                     <figure>
                       <figcaption>Pipeline Output</figcaption>
                       {frame.pipelineOutput ? (
-                        <img src={frame.pipelineOutput} alt={`Frame ${frame.frameIndex} pipeline output`} loading="lazy" />
+                        <AuthenticatedImage src={frame.pipelineOutput} alt={`Frame ${frame.frameIndex} pipeline output`} loading="lazy" openLink />
                       ) : <div>No image</div>}
                     </figure>
                   </div>

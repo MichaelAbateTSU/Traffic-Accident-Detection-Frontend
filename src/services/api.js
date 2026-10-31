@@ -1,6 +1,43 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+import { resolveApiConfiguration } from '../config.js';
+
+export const API_CONFIGURATION = resolveApiConfiguration(import.meta.env);
+const API_BASE = API_CONFIGURATION.baseUrl;
 const TRIMMED_API_BASE = API_BASE.endsWith('/') ? API_BASE.slice(0, -1) : API_BASE;
 const API_ORIGIN = TRIMMED_API_BASE.match(/^(?:[a-z][a-z\d+\-.]*:)?\/\/[^/?#]+/i)?.[0] ?? '';
+let operatorToken = '';
+
+export function setOperatorToken(token) {
+  const value = String(token ?? '').trim();
+  if (/[\r\n]/.test(value)) throw new Error('Operator token must not contain line breaks.');
+  operatorToken = value;
+}
+
+function authorizationHeaders() {
+  return operatorToken ? { Authorization: `Bearer ${operatorToken}` } : {};
+}
+
+export async function fetchArtifactBlob(path, { signal } = {}) {
+  if (API_CONFIGURATION.error) throw createApiError(API_CONFIGURATION.error);
+  if (!path || (/^[a-z][a-z\d+\-.]*:/i.test(path) && !/^https?:/i.test(path))) {
+    throw createApiError('Unsupported artifact URL.');
+  }
+  const pageUrl = globalThis.location?.href ?? 'http://localhost/';
+  const url = new URL(resolveAssetUrl(path), pageUrl);
+  const backendUrl = new URL(`${TRIMMED_API_BASE}/`, pageUrl);
+  if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) {
+    throw createApiError('Unsupported artifact URL.');
+  }
+  const response = await fetch(url.href, {
+    headers: url.origin === backendUrl.origin ? authorizationHeaders() : {},
+    credentials: 'omit',
+    redirect: 'error',
+    signal,
+  });
+  if (!response.ok) throw createApiError(`Artifact request failed (HTTP ${response.status}).`, { status: response.status });
+  const blob = await response.blob();
+  if (!blob.type.startsWith('image/')) throw createApiError('Backend returned an invalid image.');
+  return blob;
+}
 
 /**
  * Backend artifact URLs are rooted at the API host (e.g. "/artifacts/<job>/...").
@@ -203,11 +240,12 @@ function mapDetectionEventApiToUi(item = {}) {
 }
 
 export async function apiFetch(path, { method = 'GET', params, body, signal } = {}) {
+  if (API_CONFIGURATION.error) throw createApiError(API_CONFIGURATION.error);
   const qs = buildQuery(params);
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
   const url = `${TRIMMED_API_BASE}${normalizedPath}${qs ? `?${qs}` : ''}`;
 
-  const headers = { Accept: 'application/json' };
+  const headers = { Accept: 'application/json', ...authorizationHeaders() };
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
   }
@@ -217,17 +255,25 @@ export async function apiFetch(path, { method = 'GET', params, body, signal } = 
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
     signal,
+    credentials: 'omit',
+    redirect: 'error',
   });
 
   let payload = null;
   try {
     payload = await response.json();
-  } catch (_) {
-    payload = null;
+  } catch {
+    if (response.ok) {
+      throw createApiError('Backend returned invalid JSON. Check the API URL and backend availability.', { status: response.status });
+    }
   }
 
   if (!response.ok) {
     throw normalizeApiError(response.status, payload);
+  }
+
+  if (!payload || typeof payload !== 'object') {
+    throw createApiError('Backend returned an invalid JSON resource.', { status: response.status });
   }
 
   if (isEnvelope(payload)) {
@@ -285,9 +331,9 @@ export function mapIncidentSummaryApiToUi(item = {}) {
     timestamp: detectedAt,
     boundingBox,
     involvedTrackIds: pickFirst(item.involved_track_ids, item.involvedTrackIds, []),
-    thumbnailUrl:
-      pickFirst(item.thumbnail_url, item.thumbnailUrl, item.frame_url, item.image_url, item.imageUrl, null) ??
-      'https://placehold.co/120x68/1e2535/8b9ab4?text=Incident',
+    thumbnailUrl: resolveAssetUrl(
+      pickFirst(item.thumbnail_url, item.thumbnailUrl, item.frame_url, item.image_url, item.imageUrl, null),
+    ),
     frameIdx: numberOrNull(pickFirst(item.frame_idx, item.frameIdx, null)),
     timestampSec: numberOrNull(pickFirst(item.timestamp_sec, item.timestampSec, null)),
     streamUrl: pickFirst(item.stream_url, item.streamUrl, null),
@@ -441,10 +487,13 @@ function buildIncidentFilterParams(options = {}) {
  * Download incidents matching the given filters as CSV via GET /incidents/export.
  */
 export async function exportIncidentsCsv(options = {}, request = {}) {
+  if (API_CONFIGURATION.error) throw createApiError(API_CONFIGURATION.error);
   const qs = buildQuery(buildIncidentFilterParams(options));
   const response = await fetch(`${TRIMMED_API_BASE}/incidents/export${qs ? `?${qs}` : ''}`, {
-    headers: { Accept: 'text/csv' },
+    headers: { Accept: 'text/csv', ...authorizationHeaders() },
     signal: request.signal,
+    credentials: 'omit',
+    redirect: 'error',
   });
   if (!response.ok) {
     let payload = null;
@@ -456,6 +505,9 @@ export async function exportIncidentsCsv(options = {}, request = {}) {
     throw normalizeApiError(response.status, payload);
   }
 
+  if (!response.headers.get('Content-Type')?.toLowerCase().includes('text/csv')) {
+    throw createApiError('Backend returned an invalid CSV export.', { status: response.status });
+  }
   const blob = await response.blob();
   const disposition = response.headers.get('Content-Disposition') ?? '';
   const match = disposition.match(/filename="?([^";]+)"?/i);
