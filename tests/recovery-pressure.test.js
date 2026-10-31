@@ -38,7 +38,11 @@ test('mounted recovery prioritizes key lookup and listings over held HTTP/1.1 hi
             export const API_CONFIGURATION={baseUrl:location.origin+'/__pressure'};
             export function parseMaxFrames(n){return Number(n)}
             async function read(path,signal) {return (await fetch('/__pressure'+path,{signal,cache:'no-store'})).json()}
-            export async function getJob(id,{signal}={}) {return read('/jobs/'+id,signal)}
+            export async function getJob(id,{signal}={}) {
+              const result=await read('/jobs/'+id,signal);
+              if(id==='new-active') window.pressureNewActive=result.item.status;
+              return result;
+            }
             export async function getJobs(query,{signal}={}) {
               const data=await read('/listing?status='+query.status,signal);
               (window.pressureListings ||= []).push(data.beforeRelease);return data;
@@ -46,7 +50,7 @@ test('mounted recovery prioritizes key lookup and listings over held HTTP/1.1 hi
             export async function getSubmission(key,{signal}={}) {
               const data=await read('/receipt',signal);window.pressureCritical=data;
               window.pressureReceiptCount=(window.pressureReceiptCount||0)+1;
-              return {item:{id:data.id,status:'pending'}};
+              return {item:{id:data.id,status:data.status}};
             }
             export async function submitDetection(){throw new Error('Unexpected inference POST')}
             export async function fetchArtifactBlob(){throw new Error('Unexpected artifact')}
@@ -66,7 +70,14 @@ test('mounted recovery prioritizes key lookup and listings over held HTTP/1.1 hi
                 }, 2000);
                 timers.add(timer);
                 res.on('close', () => { clearTimeout(timer); timers.delete(timer); held.delete(res); });
-              } else if (req.url.includes('/receipt')) res.end(JSON.stringify({ beforeRelease: !released, id: `accepted-${++receipts}` }));
+              } else if (req.url.includes('/receipt')) {
+                const n = ++receipts;
+                const send = () => res.end(JSON.stringify({ beforeRelease: !released, id: n === 8 ? 'new-active' : `accepted-${n}`, status: n === 8 ? 'pending' : 'complete' }));
+                if (n === 8) {
+                  const timer = setTimeout(() => { timers.delete(timer); send(); }, 100);
+                  timers.add(timer);
+                } else send();
+              }
               else if (req.url.includes('/listing')) res.end(JSON.stringify({ beforeRelease: !released, items: [{ id: 'active', status: 'running' }], meta: { pagination: { has_next: false } } }));
               else res.end(JSON.stringify({ item: { id: req.url.split('/').pop(), status: 'complete', framesProcessed: 120 } }));
               return;

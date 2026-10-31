@@ -29,7 +29,7 @@ function formatBoundingBox(boundingBox) {
 
 export default function JobStatusCard({ job }) {
   if (!job) return null;
-  const displayStatus = getDisplayStatus(job.status);
+  const displayStatus = job.admissionStatusUnknown ? 'accepted (durable status unconfirmed)' : getDisplayStatus(job.status);
   const eventsCount = job.eventCount ?? (Array.isArray(job.events) ? job.events.length : 0);
   const frames = Array.isArray(job.frames) ? job.frames : [];
   const accidentLabel =

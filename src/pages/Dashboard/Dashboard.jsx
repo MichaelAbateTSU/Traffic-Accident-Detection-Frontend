@@ -127,6 +127,7 @@ export default function Dashboard() {
   const totalFixedCameras = FIXED_CAMERA_STREAM_URLS.length;
   const pollingTimerRef = useRef(null);
   const pollingRequestsRef = useRef(new Map());
+  const lastPolledIdRef = useRef(null);
   const monitoredJobsRef = useRef([]);
   const startingJobRef = useRef(false);
   const recoveringMonitorRef = useRef(true);
@@ -173,9 +174,13 @@ export default function Dashboard() {
       return;
     }
 
+    const nextIndex = (pendingIds.indexOf(lastPolledIdRef.current) + 1) % pendingIds.length;
+    const orderedIds = [...pendingIds.slice(nextIndex), ...pendingIds.slice(0, nextIndex)];
     await Promise.all(
-      pendingIds.map(async (jobId) => {
+      orderedIds.map(async (jobId) => {
         if (pollingRequestsRef.current.has(jobId)) return;
+        if (pollingRequestsRef.current.size >= 2) return;
+        lastPolledIdRef.current = jobId;
         const controller = new AbortController();
         pollingRequestsRef.current.set(jobId, controller);
         try {
@@ -203,6 +208,7 @@ export default function Dashboard() {
             return normalizeMonitorJob({
               ...jobItem,
               ...item,
+              admissionStatusUnknown: false,
               monitorError: null,
               events: item.events?.length ? item.events : jobItem.events ?? [],
               frames: mergeFrameImages(jobItem.frames ?? [], item.frames ?? []),
@@ -246,7 +252,7 @@ export default function Dashboard() {
         // Polling can finish while older recovery listings are still in flight.
         if (previous && !previous.recoveringRead && ['complete', 'failed'].includes(previous.status) && needsMonitoring(item.status)) continue;
         merged.set(item.id, normalizeMonitorJob({
-          ...(item.recoveringRead && previous ? { ...item, ...previous, recoveringRead: true } : { ...previous, ...item }),
+          ...(item.recoveringRead && previous && !['complete', 'failed'].includes(item.status) ? { ...item, ...previous, recoveringRead: true } : { ...previous, ...item }),
           monitorError: item.monitorError,
           events: item.events?.length ? item.events : previous?.events ?? [],
           frames: mergeFrameImages(previous?.frames, item.frames),
@@ -444,7 +450,7 @@ export default function Dashboard() {
         trackAcceptedJob(acceptedJob);
         if (journalSaveError) throw journalSaveError;
         setSubmissionIntents(journalRef.current.read());
-        if (admissionFailed) throw new Error('The original job was reserved but inference admission failed. Its job ID is retained; no replacement inference was started.');
+        if (admissionFailed) throw new Error('The original job was reserved but inference admission failed. Its durable status must be monitored; no replacement inference was started.');
       }
 
       if (!queuedResponses.length) {

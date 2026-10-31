@@ -18,6 +18,7 @@ try {
   root.render(<MemoryRouter><Dashboard /></MemoryRouter>);
   const end = Date.now() + 12000;
   const finished = () => window.pressureReceiptCount === 8 && window.pressureCritical && window.pressureListings?.length === 2
+    && window.pressureNewActive === 'complete'
     && document.getElementById('root').textContent.includes('Frames processed: 120');
   while (!finished() && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 20));
   if (!finished()) throw new Error('Critical recovery and progressive active polling never completed');

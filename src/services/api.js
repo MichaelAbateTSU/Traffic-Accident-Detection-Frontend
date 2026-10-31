@@ -695,9 +695,10 @@ export async function submitDetection(payload, { key, signal } = {}) {
   } catch (error) {
     const detail = error.details?.detail;
     if (error.status === 503 && error.code === 'inference_admission_failed') {
-      return submissionReceipt({
-        ...detail, status: 'failed', error: error.message, replayed: true,
+      const receipt = submissionReceipt({
+        ...detail, status: 'pending', replayed: true,
       }, 200, { key, admissionFailed: true });
+      return { ...receipt, item: { ...receipt.item, admissionStatusUnknown: true, monitorError: `${error.message} Durable job status is unconfirmed; monitoring continues without resubmission.` } };
     }
     if (error.status === 404) {
       throw createApiError('The versioned submission endpoint is unavailable. Acceptance remains unknown; do not retry against the legacy endpoint.', {

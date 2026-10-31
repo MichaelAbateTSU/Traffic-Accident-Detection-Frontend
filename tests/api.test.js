@@ -354,9 +354,10 @@ test('queue admission failure preserves a validated original job identity withou
     } else {
       const result = await api.submitDetection(submissionPayload, { key: submissionKey });
       assert.equal(result.item.id, 'reserved-failed-job');
-      assert.equal(result.item.status, 'failed');
+      assert.equal(result.item.status, 'pending');
+      assert.equal(result.item.admissionStatusUnknown, true);
       assert.equal(result.admissionFailed, true);
-      assert.equal(result.item.error, 'The inference worker is unavailable.');
+      assert.match(result.item.monitorError, /inference worker is unavailable.*status is unconfirmed/);
     }
   }
 });

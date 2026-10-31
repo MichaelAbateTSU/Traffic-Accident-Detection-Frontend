@@ -3,6 +3,7 @@
 import json
 import logging
 import socket
+import sqlite3
 import sys
 from datetime import datetime, timezone
 
@@ -17,6 +18,8 @@ from app.services.job_store import JobStore
 logging.disable(logging.CRITICAL)
 settings.api_prefix = "/api"
 store = JobStore(database_path=sys.argv[1], start_reaper=False)
+blocker = sqlite3.connect(sys.argv[1], check_same_thread=False)
+blocked_jobs = []
 detect.job_store = store
 jobs.job_store = store
 
@@ -27,6 +30,10 @@ class FakeQueue:
 
     def submit(self, job_id, source, max_frames, model, save_frames):
         self.count += 1
+        if "/blocked-admission.mp4" in source:
+            blocked_jobs.append(job_id)
+            blocker.execute("BEGIN IMMEDIATE")
+            raise RuntimeError("Synthetic queue admission failure with blocked terminal persistence")
         if "/admission-failure.mp4" in source:
             raise RuntimeError("Synthetic queue admission failure")
         if "/held-job.mp4" in source:
@@ -47,6 +54,15 @@ app.state.detection_queue = queue
 @app.get("/__fixture/count")
 def count():
     return {"count": queue.count}
+
+
+@app.post("/__fixture/recover")
+def recover():
+    blocker.rollback()
+    for job_id in list(blocked_jobs):
+        blocked_jobs.remove(job_id)
+        store.fail_job(job_id, "The inference worker is unavailable.")
+    return {"recovered": True}
 
 
 sock = socket.socket()

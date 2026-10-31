@@ -208,7 +208,11 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
       try {
         const { item } = await getMonitoredJob(id, { signal: historical ? historyController.signal : requestSignal });
         requestSignal.throwIfAborted();
-        recovered.set(id, { ...item, recoveringRead: false, recoveryDeferred: false });
+        const previous = recovered.get(id);
+        recovered.set(id, {
+          ...(['complete', 'failed'].includes(previous?.status) && ['pending', 'running'].includes(item.status) ? previous : item),
+          recoveringRead: false, recoveryDeferred: false, admissionStatusUnknown: false,
+        });
       } catch (error) {
         if (error.name === 'AbortError') {
           if (!historical || !historyExpired || requestSignal.aborted) throw error;
@@ -218,12 +222,14 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
           ? `Job ${id} is unavailable (expired or unknown); its inference outcome is unknown. ${error.message}`
           : `Cannot recover job ${id}: ${error.message}`;
         errors.set(id, message);
-        const listed = listings.get(id);
+        const previous = recovered.get(id);
+        const terminal = ['complete', 'failed'].includes(previous?.status);
+        const listed = terminal ? null : listings.get(id);
         if (listed) {
           recovered.set(id, { ...listed, recoveringRead: false, recoveryDeferred: false });
           errors.delete(id);
         } else {
-          recovered.set(id, error.status === 404
+          recovered.set(id, error.status === 404 && !terminal
             ? { id, status: 'unavailable', recoveringRead: false, recoveryDeferred: false, monitorError: message }
             : { ...recovered.get(id), id, recoveringRead: false, recoveryDeferred: false, monitorError: message });
         }
@@ -246,8 +252,9 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
         }
         listings.set(item.id, item);
         const previous = recovered.get(item.id);
+        if (previous && ['complete', 'failed'].includes(previous.status) && ['pending', 'running'].includes(item.status)) continue;
         if (!previous || previous.recoveringRead || errors.has(item.id)) {
-          recovered.set(item.id, { ...item, recoveringRead: false, recoveryDeferred: false });
+          recovered.set(item.id, { ...item, recoveringRead: false, recoveryDeferred: false, admissionStatusUnknown: false });
           errors.delete(item.id);
           changed.push(recovered.get(item.id));
         }
@@ -270,9 +277,13 @@ export async function recoverJobMonitor({ signal, onJobs, knownIds = [], journal
       reconcileIntents(journalApi, {
         signal: historyController.signal, ownerSignal: requestSignal, expired: () => historyExpired,
         onAccepted: (item) => {
-          if (!recovered.has(item.id)) recovered.set(item.id, { ...item, recoveringRead: true });
+          const previous = recovered.get(item.id);
+          const active = ['pending', 'running'].includes(item.status);
+          if (!previous || !['complete', 'failed'].includes(previous.status)) {
+            recovered.set(item.id, { ...previous, ...item, recoveringRead: !active, recoveryDeferred: false, admissionStatusUnknown: false, monitorError: null });
+          }
           emit([recovered.get(item.id)]);
-          acceptedReads.push(item.id);
+          if (!active) acceptedReads.push(item.id);
         },
       }),
       ...['pending', 'running'].map(listStatus),

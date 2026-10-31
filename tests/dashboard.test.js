@@ -157,7 +157,7 @@ for (const [label, failAt, accepted] of [
     await dashboard.submit();
     const jobs = dashboard.render().filter((node) => node.type === 'JobStatusCard');
     assert.equal(jobs.length, accepted);
-    await dashboard.poll();
+    for (let round = 0; round < 5; round++) await dashboard.poll();
     assert.equal(new Set(dashboard.refreshedIds).size, accepted);
     assert.equal(dashboard.timers.size, accepted ? 1 : 0);
     assert.equal(dashboard.reloads, accepted ? 1 : 0);
@@ -179,7 +179,7 @@ for (const [label, failAt, accepted] of [
     }
     const previousReads = dashboard.refreshedIds.length;
     await dashboard.poll();
-    assert.equal(dashboard.refreshedIds.length, previousReads + accepted);
+    assert.equal(dashboard.refreshedIds.length, previousReads + Math.min(2, accepted));
     assert.equal(warnings().length, failAt === Infinity ? 0 : 1);
 
     const previousPayloads = dashboard.payloads.length;
@@ -190,7 +190,7 @@ for (const [label, failAt, accepted] of [
       assert.equal(warnings().length, failAt === Infinity ? 0 : 1);
       assert.match(JSON.stringify(dashboard.render()), /Monitoring continues/);
       dashboard.setStatus('complete');
-      await dashboard.poll();
+      for (let round = 0; round < 5; round++) await dashboard.poll();
       assert.equal(dashboard.timers.size, 0);
       dashboard.setStatus('pending');
       await dashboard.submit();
@@ -231,11 +231,11 @@ for (const finalStatus of ['complete', 'failed']) {
     const dashboard = await createDashboard();
     await dashboard.submit();
     dashboard.setStatus('running');
-    await dashboard.poll();
+    for (let round = 0; round < 5; round++) await dashboard.poll();
     assert.equal(dashboard.timers.size, 1);
     assert.ok(dashboard.render().filter((node) => node.type === 'JobStatusCard').every((node) => node.props.job.status === 'running'));
     dashboard.setStatus(finalStatus);
-    await dashboard.poll();
+    for (let round = 0; round < 5; round++) await dashboard.poll();
     assert.equal(dashboard.timers.size, 0);
     assert.ok(dashboard.render().filter((node) => node.type === 'JobStatusCard').every((node) => node.props.job.status === finalStatus));
     const summary = dashboard.render().find((node) => node.type === 'strong' && Array.isArray(node.props.children) && node.props.children[0] === 'All ');

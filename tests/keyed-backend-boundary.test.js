@@ -11,7 +11,7 @@ import { webcrypto } from 'node:crypto';
 import { createSubmissionJournal, hasUncertainSubmissions } from '../src/services/submissionJournal.js';
 import * as journalServices from '../src/services/submissionJournal.js';
 
-const BACKEND_SHA = 'ffc6990d7aa2ecd3c5e93caa0b45d414cb2af90b';
+const BACKEND_SHA = '5a1bfc38e207913c66eb6120e986147a66410424';
 
 async function boundaryApi(baseUrl, transport) {
   const context = createContext({ URL, URLSearchParams, Blob, fetch: transport });
@@ -150,12 +150,27 @@ test('frontend receipt/privacy contract against pinned backend HTTP, auth and SQ
     const failedKey = failedBatch.entries[0].key;
     journal.markSending(failedKey);
     const failed = await reloadedApi.submitDetection(failedPayload, { key: failedKey });
-    assert.equal(failed.item.status, 'failed');
+    assert.equal(failed.item.status, 'pending');
+    assert.equal(failed.item.admissionStatusUnknown, true);
     assert.equal(failed.admissionFailed, true);
     journal.accept(failedKey, failed.item.id);
     const reconciledFailed = await reloadedApi.submitDetection(failedPayload, { key: failedKey });
     assert.equal(reconciledFailed.item.id, failed.item.id);
     assert.equal(reconciledFailed.item.status, 'failed');
+    const blockedKey = `v1.${Math.floor(Date.now() / 1000)}.${webcrypto.randomUUID()}`;
+    const blockedPayload = { ...payload, stream_url: 'https://fixture.invalid/blocked-admission.mp4' };
+    const blocked = await reloadedApi.submitDetection(blockedPayload, { key: blockedKey });
+    assert.equal(blocked.item.admissionStatusUnknown, true);
+    assert.equal(blocked.item.status, 'pending');
+    assert.match(blocked.item.monitorError, /awaiting storage recovery/);
+    assert.equal((await reloadedApi.getSubmission(blockedKey)).item.status, 'pending');
+    assert.equal((await reloadedApi.getJob(blocked.item.id)).item.status, 'pending');
+    const blockedReplay = await reloadedApi.submitDetection(blockedPayload, { key: blockedKey });
+    assert.equal(blockedReplay.item.id, blocked.item.id);
+    assert.equal(blockedReplay.item.status, 'pending');
+    assert.equal((await (await fetch(`${base}/__fixture/count`, { headers: auth })).json()).count, 3);
+    await fetch(`${base}/__fixture/recover`, { method: 'POST', headers: auth });
+    assert.equal((await reloadedApi.getSubmission(blockedKey)).item.status, 'failed');
     const raceBatch = await journal.prepareBatch([source], { maxFrames: 120, saveFrames: false, sourceKind: 'arbitrary', protocol: 'keyed-v1' });
     const raceKey = raceBatch.entries[0].key;
     journal.markSending(raceKey);
@@ -171,7 +186,7 @@ test('frontend receipt/privacy contract against pinned backend HTTP, auth and SQ
     assert.deepEqual(raced.map((item) => item.replayed).sort(), [false, true]);
     journal.accept(raceKey, raced[0].item.id);
     journal.accept(raceKey, raced[1].item.id);
-    assert.equal((await (await fetch(`${base}/__fixture/count`, { headers: auth })).json()).count, 3,
+    assert.equal((await (await fetch(`${base}/__fixture/count`, { headers: auth })).json()).count, 4,
       'Two same-key arrivals after an unknown lookup reserve just one additional job.');
     const heldPayload = { ...payload, stream_url: 'https://fixture.invalid/held-job.mp4' };
     const heldBatch = await journal.prepareBatch([heldPayload.stream_url], {
@@ -186,7 +201,7 @@ test('frontend receipt/privacy contract against pinned backend HTTP, auth and SQ
     assert.equal(activeRecovery.jobs.find((item) => item.id === failed.item.id).status, 'failed');
     assert.equal(activeRecovery.jobs.find((item) => item.id === recoveredId).framesProcessed, 120);
     assert.equal(activeRecovery.jobs.length, 4);
-    assert.equal((await (await fetch(`${base}/__fixture/count`, { headers: auth })).json()).count, 4,
+    assert.equal((await (await fetch(`${base}/__fixture/count`, { headers: auth })).json()).count, 5,
       'Restoring saved, journal and actively listed jobs never starts additional inference.');
     reloadedApi.setOperatorToken('');
     await assert.rejects(reloadedApi.getSubmission(key), (error) => error.status === 401);

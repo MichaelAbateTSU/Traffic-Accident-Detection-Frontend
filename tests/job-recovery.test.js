@@ -385,7 +385,7 @@ test('all keyed identities become visible before held accepted-job reads settle,
   assert.equal(reads.length, 2, 'Recovered status HTTP concurrency remains bounded');
   clock.expire();
   await harness.flush();
-  assert.ok(harness.elements.some((item) => item.props.children === 'Retry deferred historical recovery (read only)'));
+  assert.ok(harness.elements.filter((item) => item.type === 'JobStatusCard').every((item) => !item.props.job.recoveryDeferred));
   assert.equal(submissions.length, 0);
   harness.unmount();
   assert.equal(clock.timers.size, 0);
@@ -441,6 +441,122 @@ test('receipt terminal outcomes remain confirmed when their subsequent status GE
   const result = await recovering;
   assert.deepEqual([...result.jobs.map((item) => item.status)], ['complete', 'failed']);
   assert.ok(result.jobs.every((item) => /timed out/.test(item.monitorError)));
+  assert.equal(clock.timers.size, 0);
+});
+
+for (const status of ['complete', 'failed']) {
+  test(`terminal ${status} receipt replaces saved fallback placeholder and survives older listing/GET`, async () => {
+    const listing = deferred();
+    const read = deferred();
+    const { api, clock, storage } = await monitorHarness({
+      saved: { ids: ['original-fallback'] },
+      getSubmission: async () => ({ item: { id: 'original-fallback', status, framesProcessed: 120 } }),
+      getJob: () => read.promise,
+      getJobs: async (query) => query.status === 'running' ? listing.promise : { items: [] },
+    });
+    const dependencies = journalDependencies({ storage });
+    const journal = dependencies.createSubmissionJournal();
+    const batch = await journal.prepareBatch(['source'], {
+      maxFrames: 120, saveFrames: false, sourceKind: 'fixed-camera', protocol: 'keyed-v1',
+    });
+    journal.markSending(batch.entries[0].key);
+    const { harness, submissions } = await dashboardHarness(api.recoverJobMonitor, api.getMonitoredJob, { journal: dependencies });
+    harness.render();
+    await harness.flush();
+    const card = () => harness.elements.find((item) => item.type === 'JobStatusCard').props.job;
+    assert.equal(card().status, status, 'Receipt must replace the saved pending placeholder immediately');
+    listing.resolve({ items: [{ id: 'original-fallback', status: 'running', framesProcessed: 1 }] });
+    await harness.flush();
+    assert.equal(card().status, status);
+    if (status === 'failed') clock.expire();
+    else read.resolve({ item: { id: 'original-fallback', status: 'pending', framesProcessed: 0 } });
+    await harness.flush();
+    assert.equal(card().status, status);
+    assert.equal(card().framesProcessed, 120);
+    assert.equal(submissions.length, 0);
+    assert.equal(clock.timers.size, 0);
+    harness.unmount();
+  });
+}
+
+for (const replay of [false, true]) {
+  test(`admission failure retains original identity and gates new inference until durable status recovers (${replay ? 'replay' : 'initial'})`, async () => {
+    let completed = false;
+    const storage = new Map();
+    const dependencies = journalDependencies({ storage });
+    const journal = dependencies.createSubmissionJournal();
+    if (replay) {
+      const batch = await journal.prepareBatch(['stream-1'], {
+        maxFrames: 120, saveFrames: false, sourceKind: 'fixed-camera', protocol: 'keyed-v1',
+      });
+      journal.markSending(batch.entries[0].key);
+    }
+    const { harness, submissions } = await dashboardHarness(async () => ({ jobs: [], intents: journal.read() }),
+      async (id) => ({ item: { id, status: completed ? 'failed' : 'pending' } }), {
+        journal: dependencies, sources: ['stream-1'],
+        startDetectionJob: async () => ({
+          item: { id: 'reserved-original', status: 'pending', admissionStatusUnknown: true, monitorError: 'Failure persistence awaits recovery.' },
+          admissionFailed: true,
+        }),
+      });
+    harness.render();
+    await harness.flush();
+    if (replay) await harness.elements.find((item) => item.props.children === 'Submit original request with same key').props.onClick();
+    else await harness.elements.find((item) => item.type === 'form').props.onSubmit({ preventDefault() {} });
+    await harness.flush();
+    const card = () => harness.elements.find((item) => item.type === 'JobStatusCard').props.job;
+    assert.equal(card().status, 'pending');
+    assert.match(JSON.stringify(harness.elements), /inference admission failed|Original inference admission failed/);
+    assert.ok(harness.elements.find((item) => item.type === 'button' && item.props.type === 'submit').props.disabled);
+    assert.equal(journal.read().batches[0].entries[0].jobId, 'reserved-original');
+    completed = true;
+    for (const tick of harness.timers.values()) tick();
+    await harness.flush();
+    assert.equal(card().status, 'failed');
+    assert.equal(card().admissionStatusUnknown, false);
+    assert.equal(submissions.length, 1);
+    harness.unmount();
+  });
+}
+
+test('admission-failure card labels durable status unconfirmed instead of failed or pending', async () => {
+  const harness = await componentHarness('../src/components/JobStatusCard/JobStatusCard.jsx', {
+    '../../utils/formatters.js': { formatDateTime: String, formatNumber: String },
+  });
+  harness.render({ job: { id: 'reserved', status: 'pending', admissionStatusUnknown: true } });
+  assert.match(JSON.stringify(harness.elements), /accepted \(durable status unconfirmed\)/);
+  harness.unmount();
+});
+
+test('delayed active receipt resumes Dashboard polling before two stale history reads settle', async () => {
+  const receipt = deferred();
+  const reads = [];
+  const { api, clock, storage } = await monitorHarness({
+    saved: { ids: ['old-held-1', 'old-held-2'] },
+    getSubmission: () => receipt.promise,
+    getJob: async (id) => {
+      reads.push(id);
+      return id === 'new-active' ? { item: { id, status: 'complete', framesProcessed: 120 } } : new Promise(() => {});
+    },
+  });
+  const dependencies = journalDependencies({ storage });
+  const journal = dependencies.createSubmissionJournal();
+  const batch = await journal.prepareBatch(['source'], {
+    maxFrames: 120, saveFrames: false, sourceKind: 'fixed-camera', protocol: 'keyed-v1',
+  });
+  journal.markSending(batch.entries[0].key);
+  const { harness, submissions } = await dashboardHarness(api.recoverJobMonitor, api.getMonitoredJob, { journal: dependencies });
+  harness.render();
+  await harness.flush();
+  assert.deepEqual(reads, ['old-held-1', 'old-held-2']);
+  receipt.resolve({ item: { id: 'new-active', status: 'pending' } });
+  await harness.flush();
+  const card = harness.elements.find((item) => item.type === 'JobStatusCard' && item.props.job.id === 'new-active').props.job;
+  assert.equal(card.status, 'complete', 'New active receipt must not wait for held history');
+  assert.equal(card.framesProcessed, 120);
+  assert.equal(submissions.length, 0);
+  harness.unmount();
+  await harness.flush();
   assert.equal(clock.timers.size, 0);
 });
 

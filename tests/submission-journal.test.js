@@ -396,6 +396,27 @@ test('journal warning failure after navigation is diagnosed even when acceptance
   assert.equal(view.sent.length, 1);
 });
 
+test('late admission-failure identity is retained after unmount without submitting remaining sources', async () => {
+  const { api } = journalHarness();
+  const pending = deferred();
+  const saved = [];
+  const view = await dashboard(api, {
+    post: () => pending.promise,
+    saveJobMonitor: (ids, warning) => saved.push({ ids: [...ids], warning }),
+  });
+  const submitting = view.submit();
+  for (let attempt = 0; !view.sent.length && attempt < 100; attempt++) await new Promise((resolve) => setTimeout(resolve, 5));
+  view.harness.unmount();
+  pending.resolve({
+    item: { id: 'admission-original', status: 'pending', admissionStatusUnknown: true },
+    admissionFailed: true,
+  });
+  await submitting;
+  assert.equal(api.read().batches[0].entries[0].jobId, 'admission-original');
+  assert.deepEqual(saved.at(-1).ids, ['admission-original']);
+  assert.equal(view.sent.length, 1);
+});
+
 test('acceptance during asynchronous replay validation cannot return a stale replay authorization', async () => {
   const { api } = journalHarness();
   const batch = await api.prepareBatch([payload.stream_url], options);
