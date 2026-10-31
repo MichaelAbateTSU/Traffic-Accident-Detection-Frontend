@@ -16,7 +16,8 @@ export function createStaleActiveListFault(send, apiBase, jobId, maximumHoldMs =
     async paused(event) {
       const url = new URL(event.request.url);
       if (event.request.method !== 'GET' || url.origin !== jobsUrl.origin ||
-          url.pathname !== jobsUrl.pathname || url.searchParams.get('status') !== 'pending') {
+          url.pathname !== jobsUrl.pathname ||
+          !['pending', 'running'].includes(url.searchParams.get('status'))) {
         return false;
       }
       if (event.responseStatusCode == null) {
@@ -27,7 +28,8 @@ export function createStaleActiveListFault(send, apiBase, jobId, maximumHoldMs =
         const result = await send('Fetch.getResponseBody', { requestId: event.requestId });
         const body = JSON.parse(result.base64Encoded ?
           Buffer.from(result.body, 'base64').toString('utf8') : result.body);
-        if (body.data?.some(job => job.job_id === jobId && job.status === 'pending')) {
+        if (body.data?.some(job => job.job_id === jobId &&
+            ['pending', 'running'].includes(job.status))) {
           heldId = event.requestId;
           counts.pendingSnapshotsHeld++;
           timer = setTimeout(() => {

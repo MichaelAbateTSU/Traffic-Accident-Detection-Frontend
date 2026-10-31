@@ -39,3 +39,19 @@ test('does not handle external hosts or unrelated status endpoints', async () =>
   }
   await fault.cleanup();
 });
+
+test('also holds a genuine running snapshot', async () => {
+  const fault = createStaleActiveListFault(async method => method === 'Fetch.getResponseBody' ?
+    { body: JSON.stringify({ data: [{ job_id: 'original', status: 'running' }] }) } : {},
+  'https://api.integration.test:8453', 'original');
+  try {
+    assert.equal(await fault.paused({
+      requestId: 'running', responseStatusCode: 200,
+      request: { method: 'GET', url: 'https://api.integration.test:8453/jobs?status=running' },
+    }), true);
+    assert.equal(fault.counts.pendingSnapshotsHeld, 1);
+    await fault.release();
+  } finally {
+    await fault.cleanup();
+  }
+});
