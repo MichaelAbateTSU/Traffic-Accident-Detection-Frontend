@@ -93,6 +93,7 @@ https://frontend.integration.test:8454 {
                "--mount", f"type=bind,source={ROOT / 'serve.py'},target=/app/browser_serve.py,readonly",
                "--mount", f"type=bind,source={ROOT / 'admission_failure_fault.py'},target=/app/admission_failure_fault.py,readonly",
                "-e", "API_TOKEN", "-e", "ENVIRONMENT=production",
+               "-e", "SYNTHETIC_DETAIL_GATE=1",
                "-e", "CORS_ORIGINS=https://frontend.integration.test:8454",
                "-e", "APPROVED_STREAM_URLS=" + json.dumps([SOURCE]),
                "-e", "JOB_DATABASE_PATH=/data/jobs.sqlite3", "-e", "OUTPUT_DIR=/data/artifacts",

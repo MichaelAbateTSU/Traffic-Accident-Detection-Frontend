@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createSubmissionResponseFault } from './submission_response_fault.mjs';
 import { createSparseReceiptFault } from './sparse_receipt_fault.mjs';
+import { createStaleJobDetailFault } from './stale_job_detail_fault.mjs';
 
 const api = 'https://api.integration.test:8453';
 const frontend = 'https://frontend.integration.test:8454';
@@ -19,6 +20,8 @@ let sparseFault;
 let failOneLookup = false;
 let fulfilledLegacyLookups = 0;
 let legacyBoundary = false;
+let olderDetailFault, gatedIdentity, gatedLookupId;
+let olderDetailVerified = false;
 function container(script) {
   return JSON.parse(execFileSync('docker', ['exec', 'r2-browser-api', 'python', '-c', script],
     { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] }));
@@ -64,13 +67,21 @@ try {
         }
         if (event.request.url === `${api}/detection-submissions/v1` &&
             event.request.method === 'GET' && event.responseStatusCode == null) {
+          if (gatedIdentity) {
+            assert.equal(gatedLookupId, undefined);
+            gatedLookupId = event.requestId;
+            return;
+          }
           if (legacyBoundary) {
             fulfilledLegacyLookups++;
             await send('Fetch.fulfillRequest', { requestId: event.requestId, responseCode: 404,
-              responseHeaders: [{ name: 'Content-Type', value: 'application/json' }],
+              responseHeaders: [{ name: 'Content-Type', value: 'application/json' },
+                { name: 'Access-Control-Allow-Origin', value: frontend },
+                { name: 'Vary', value: 'Origin' }],
               body: Buffer.from(JSON.stringify({ detail: 'Not Found' })).toString('base64') });
             return;
           }
+          if (olderDetailFault && await olderDetailFault.paused(event)) return;
           if (failOneLookup) {
             failOneLookup = false;
             await send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'ConnectionClosed' });
@@ -143,6 +154,21 @@ try {
   await send('Network.enable');
   await send('Network.setCacheDisabled', { cacheDisabled: true });
   await send('Page.enable');
+  await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
+    const original=window.fetch;
+    window.submissionTransportObservation={statuses:[],rejections:0};
+    window.fetch=async function(input,options) {
+      const submission=String(input).endsWith('/detection-submissions/v1')&&options?.method==='POST';
+      try {
+        const response=await original.apply(this,arguments);
+        if(submission)window.submissionTransportObservation.statuses.push(response.status);
+        return response;
+      } catch(error) {
+        if(submission)window.submissionTransportObservation.rejections++;
+        throw error;
+      }
+    };
+  })()` });
   await send('Fetch.enable', { patterns: [{ urlPattern: 'http*', requestStage: 'Request' }] });
   if (phase === 'admission') await evaluate('localStorage.clear()');
   await send('Page.navigate', { url: frontend });
@@ -164,7 +190,62 @@ try {
     await wait(`${journalExpression}.batches.some(b=>b.entries.some(e=>e.state==="uncertain"||e.state==="accepted"))`);
     if (phase === 'initial') {
       await wait('document.body.textContent.includes("acceptance") || document.body.textContent.includes("unknown")');
+      const observationDeadline = Date.now() + 10000;
+      while (loss.counts.admittedResponsesDropped === 0 && Date.now() < observationDeadline) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      await wait('window.submissionTransportObservation.rejections===1');
+      assert.deepEqual(await evaluate('window.submissionTransportObservation.statuses'), []);
+      stage = 'genuine_older_detail_interleaving';
+      const originalKey = posts[0].key;
+      const originalReceipt = await request('/detection-submissions/v1', originalKey);
+      assert.equal(originalReceipt.status, 200);
+      const originalId = originalReceipt.body.job_id;
+      await seedUncertainIdentity(originalKey, originalId);
+      olderDetailFault = createStaleJobDetailFault(send, api, originalId);
+      gatedIdentity = originalKey;
       await navigateAwayAndBack();
+      const captureDeadline = Date.now() + 10000;
+      while ((!olderDetailFault.held || !gatedLookupId) && Date.now() < captureDeadline) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      assert.equal(olderDetailFault.held, true, 'Actual active detail could not be captured in time');
+      assert.ok(gatedLookupId);
+      container("from pathlib import Path; Path('/tmp/synthetic-detail-gate-release').touch(); print('{}')");
+      const completeDeadline = Date.now() + 12000;
+      let genuineComplete = false;
+      while (Date.now() < completeDeadline) {
+        const durable = container(`import sqlite3,json; c=sqlite3.connect('/data/jobs.sqlite3'); print(c.execute('SELECT payload FROM jobs WHERE id=?',(${JSON.stringify(originalId)},)).fetchone()[0])`);
+        if (durable.status === 'complete') { genuineComplete = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      assert.equal(genuineComplete, true, 'Genuine inference exceeded bounded detail interleaving');
+      gatedIdentity = undefined;
+      await send('Fetch.continueRequest', { requestId: gatedLookupId });
+      await wait(`${cardExpression(originalId)}?.textContent.includes("Status: done")`, 5000);
+      await evaluate(`(() => {
+        window.terminalRegressions=[];
+        const inspect=()=> {
+          const card=${cardExpression(originalId)};
+          if(card && /Status:\\s*(pending|in-progress)/.test(card.textContent))window.terminalRegressions.push('active');
+        };
+        window.terminalObserver=new MutationObserver(inspect);
+        window.terminalObserver.observe(document.body,{subtree:true,childList:true,characterData:true});
+        inspect();
+      })()`);
+      await olderDetailFault.release();
+      await olderDetailFault.cleanup();
+      olderDetailFault = undefined;
+      await wait(`${cardExpression(originalId)}?.textContent.includes("Frames processed: 12") || [...document.querySelectorAll('[role="alert"]')].some(n=>n.textContent.includes("older active")&&n.textContent.includes("Retry"))`);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      assert.deepEqual(await evaluate('window.terminalRegressions'), []);
+      await evaluate('window.terminalObserver.disconnect()');
+      if (!await evaluate(`${cardExpression(originalId)}.textContent.includes("Frames processed: 12")`)) {
+        await click('Retry job result recovery (read only)');
+        await wait(`${cardExpression(originalId)}?.textContent.includes("Frames processed: 12")`);
+      }
+      assert.equal(posts.length, 1);
+      olderDetailVerified = true;
     }
   }
   const entry = await wait(`${journalExpression}.batches.flatMap(b=>b.entries)[0]`);
@@ -183,6 +264,9 @@ try {
     await navigateAwayAndBack();
     await wait(`${cardExpression(id)} && !${cardExpression(id)}.textContent.includes("Status: failed")`);
     assert.equal(posts.length, 1);
+    await wait('window.submissionTransportObservation.statuses.includes(503)');
+    const transport = await evaluate('window.submissionTransportObservation.statuses');
+    assert.deepEqual(transport, [503]);
     container("import json; from pathlib import Path; Path('/tmp/synthetic-admission-fault/release').touch(); print('{}')");
     await wait(`${cardExpression(id)}?.textContent.includes("Status: failed")`, 70000);
     const terminal = await request('/detection-submissions/v1', entry.key);
@@ -286,6 +370,7 @@ try {
       frames_processed: job.frames_processed, peak_heuristic: job.peak_confidence,
       event_count: job.events.length, browserPosts: posts.length,
       admissionResponsesDroppedBeforeBrowserHeaders: loss.counts.admittedResponsesDropped,
+      actualOlderActiveDetailAfterTerminalReceipt: olderDetailVerified,
       savedImagesDecoded: 9, artifactNoTokenStatus: badAuth, artifactTokenStatus: frameAuth,
       recoveryStoragePrivate: true,
       ...(phase === 'recovery' ? { lateRealSparseReceiptPreservedDetails: true,
@@ -300,5 +385,6 @@ try {
   process.exitCode = 1;
 } finally {
   await sparseFault?.cleanup();
+  await olderDetailFault?.cleanup();
   ws?.close();
 }

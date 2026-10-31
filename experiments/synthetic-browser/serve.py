@@ -2,6 +2,7 @@
 import functools
 import json
 import os
+import time
 from pathlib import Path
 import uvicorn
 from app import main
@@ -32,6 +33,10 @@ original_job = service.run_detection_job
 
 def measured_job(*args, **kwargs):
     try:
+        if os.environ.get("SYNTHETIC_DETAIL_GATE") == "1":
+            deadline = time.monotonic() + 15
+            while not Path("/tmp/synthetic-detail-gate-release").exists() and time.monotonic() < deadline:
+                time.sleep(0.025)
         return original_job(*args, **kwargs)
     finally:
         Path("/data/inference-counts.json").write_text(json.dumps(counts))

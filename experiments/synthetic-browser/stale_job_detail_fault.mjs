@@ -7,6 +7,7 @@ export function createStaleJobDetailFault(send, apiBase, jobId, maximumHoldMs = 
   let heldId, timer, automaticRelease, transportError;
   let expired = false, released = false;
   return {
+    get held() { return Boolean(heldId); },
     async paused(event) {
       if (event.request.method !== 'GET' || event.request.url !== endpoint) return false;
       if (event.responseStatusCode == null) {
