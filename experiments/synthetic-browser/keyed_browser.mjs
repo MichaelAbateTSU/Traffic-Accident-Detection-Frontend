@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createSubmissionResponseFault } from './submission_response_fault.mjs';
+import { createSparseReceiptFault } from './sparse_receipt_fault.mjs';
 
 const api = 'https://api.integration.test:8453';
 const frontend = 'https://frontend.integration.test:8454';
@@ -14,6 +15,10 @@ const posts = [];
 let exceptions = 0, externalBlocked = 0, cancelled = 0;
 const interceptionFailures = [];
 let send, evaluate;
+let sparseFault;
+let failOneLookup = false;
+let fulfilledLegacyLookups = 0;
+let legacyBoundary = false;
 function container(script) {
   return JSON.parse(execFileSync('docker', ['exec', 'r2-browser-api', 'python', '-c', script],
     { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] }));
@@ -57,6 +62,22 @@ try {
           await send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' });
           return;
         }
+        if (event.request.url === `${api}/detection-submissions/v1` &&
+            event.request.method === 'GET' && event.responseStatusCode == null) {
+          if (legacyBoundary) {
+            fulfilledLegacyLookups++;
+            await send('Fetch.fulfillRequest', { requestId: event.requestId, responseCode: 404,
+              responseHeaders: [{ name: 'Content-Type', value: 'application/json' }],
+              body: Buffer.from(JSON.stringify({ detail: 'Not Found' })).toString('base64') });
+            return;
+          }
+          if (failOneLookup) {
+            failOneLookup = false;
+            await send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'ConnectionClosed' });
+            return;
+          }
+        }
+        if (sparseFault && await sparseFault.paused(event)) return;
         if (phase === 'initial' && await loss.paused(event)) return;
         await send(event.responseStatusCode == null ? 'Fetch.continueRequest' : 'Fetch.continueResponse',
           { requestId: event.requestId });
@@ -108,6 +129,16 @@ try {
   }
   const journalExpression = `JSON.parse(localStorage.getItem(${JSON.stringify(`tad_submissions:v1:${api}`)})||'{"batches":[]}')`;
   const cardExpression = id => `([...document.querySelectorAll('article')].find(n=>n.textContent.includes(${JSON.stringify(`Job ID: ${id}`)})))`;
+  async function seedUncertainIdentity(key, jobId, retainSavedId = true) {
+    await evaluate(`(() => {
+      const journal=${journalExpression};
+      const entry=journal.batches.flatMap(b=>b.entries)[0];
+      entry.key=${JSON.stringify(key)};entry.state="uncertain";entry.jobId=null;
+      localStorage.setItem(${JSON.stringify(`tad_submissions:v1:${api}`)},JSON.stringify(journal));
+      localStorage.setItem(${JSON.stringify(`tad_monitor:${api}`)},JSON.stringify({
+        ids:${JSON.stringify(retainSavedId ? [jobId] : [])},warning:null}));
+    })()`);
+  }
   await send('Runtime.enable');
   await send('Network.enable');
   await send('Network.setCacheDisabled', { cacheDisabled: true });
@@ -174,7 +205,14 @@ try {
     assert.equal(job.frames.length, 12);
     assert.ok(Number.isFinite(job.peak_confidence));
     assert.equal(job.events.length, 0);
+    stage = 'mounted_zero_event_details';
     await wait(`${cardExpression(id)}.textContent.includes("Alarm frames (0)")`);
+    stage = 'decoded_authenticated_gallery';
+    await evaluate(`(() => {
+      const title=[...document.querySelectorAll('h3')].find(h=>h.textContent.includes('Frame Images - Job'));
+      if(!title)throw new Error('Mounted gallery missing');
+      title.parentElement.scrollIntoView();
+    })()`);
     await wait('document.querySelectorAll("img[src^=\\"blob:\\"]").length>=9 && [...document.querySelectorAll("img[src^=\\"blob:\\"]")].every(i=>i.complete&&i.naturalWidth>0)');
     const badAuth = await evaluate(`fetch(${JSON.stringify(job.frames[0].capture)}).then(r=>r.status)`);
     assert.equal(badAuth, 401);
@@ -193,6 +231,52 @@ try {
       assert.deepEqual(job, previous.job);
       assert.equal(entry.key, previous.key);
       assert.equal(posts.length, 0);
+      stage = 'late_real_sparse_receipt_full_result';
+      await seedUncertainIdentity(entry.key, id);
+      sparseFault = createSparseReceiptFault(send, api, entry.key, id);
+      await navigateAwayAndBack();
+      await wait(`${cardExpression(id)}?.textContent.includes("Frames processed: 12")`);
+      const pauseDeadline = Date.now() + 10000;
+      while (!sparseFault.held && Date.now() < pauseDeadline) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      assert.equal(sparseFault.held, true);
+      await sparseFault.release();
+      await sparseFault.cleanup();
+      sparseFault = undefined;
+      await wait(`${journalExpression}.batches.flatMap(b=>b.entries)[0].state==="accepted"`);
+      assert.ok(await evaluate(`${cardExpression(id)}.textContent.includes("Frames processed: 12") && ${cardExpression(id)}.textContent.includes("Alarm frames (0)")`));
+      assert.equal(posts.length, 0);
+      stage = 'explicit_actual_same_key_replay';
+      await seedUncertainIdentity(entry.key, id);
+      failOneLookup = true;
+      await navigateAwayAndBack();
+      await wait('[...document.querySelectorAll("button")].some(b=>b.textContent.trim()==="Submit original request with same key"&&!b.disabled)');
+      await fill(`[id=${JSON.stringify(`replay-${entry.key}`)}]`, source);
+      await click('Submit original request with same key');
+      await wait(`${journalExpression}.batches.flatMap(b=>b.entries)[0].state==="accepted"`);
+      await wait(`${cardExpression(id)}?.textContent.includes("Frames processed: 12") && ${cardExpression(id)}?.textContent.includes("Alarm frames (0)")`);
+      assert.equal(posts.length, 1);
+      assert.equal(posts[0].key, entry.key);
+      assert.deepEqual(posts[0].body, { stream_url: source, max_frames: 12, save_frames: true });
+      assert.deepEqual((await request(`/jobs/${id}`)).body, job);
+      const inference = container("from pathlib import Path; print(Path('/data/inference-counts.json').read_text())");
+      for (const name of ['yolo_calls', 'tracker_calls', 'scorer_calls']) assert.equal(inference[name], 12);
+      stage = 'mocked_legacy_transport_rejection';
+      await seedUncertainIdentity(entry.key, id);
+      legacyBoundary = true;
+      await navigateAwayAndBack();
+      await wait('document.body.textContent.includes("Versioned submission lookup is unavailable")');
+      assert.equal(posts.length, 1);
+      assert.equal(fulfilledLegacyLookups, 1);
+      legacyBoundary = false;
+      stage = 'real_expired_key_structured_ui';
+      const expiredKey = `v1.${Math.floor(Date.now()/1000)-90000}.${crypto.randomUUID()}`;
+      await seedUncertainIdentity(expiredKey, id, false);
+      await navigateAwayAndBack();
+      await wait('document.body.textContent.includes("identity expired; outcome unknown")');
+      assert.equal(posts.length, 1);
+      assert.equal(await evaluate('[...document.querySelectorAll("button")].some(b=>b.textContent.trim()==="Submit original request with same key")'), false);
     }
     const listed = (await request('/jobs')).body.data;
     assert.deepEqual(listed.map(j=>j.job_id), [id]);
@@ -203,7 +287,11 @@ try {
       event_count: job.events.length, browserPosts: posts.length,
       admissionResponsesDroppedBeforeBrowserHeaders: loss.counts.admittedResponsesDropped,
       savedImagesDecoded: 9, artifactNoTokenStatus: badAuth, artifactTokenStatus: frameAuth,
-      recoveryStoragePrivate: true, exceptions, externalBlocked, cancelled }));
+      recoveryStoragePrivate: true,
+      ...(phase === 'recovery' ? { lateRealSparseReceiptPreservedDetails: true,
+        explicitReplayPosts: 1, additionalInference: 0, mockedLegacyLookupRejection: true,
+        actualBackdatedExpiredKeyRejected: true } : {}),
+      exceptions, externalBlocked, cancelled }));
   }
 } catch (error) {
   console.log(JSON.stringify({ status: 'failed', phase, stage, errorType: error.name,
@@ -211,5 +299,6 @@ try {
     exceptions, interceptionFailureCount: interceptionFailures.length }));
   process.exitCode = 1;
 } finally {
+  await sparseFault?.cleanup();
   ws?.close();
 }

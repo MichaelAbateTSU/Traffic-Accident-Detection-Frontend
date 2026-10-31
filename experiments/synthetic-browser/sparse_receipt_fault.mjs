@@ -8,6 +8,7 @@ export function createSparseReceiptFault(send, apiBase, key, jobId, maximumHoldM
   let expired = false;
   let released = false;
   return {
+    get held() { return Boolean(heldId); },
     async paused(event) {
       const requestKey = Object.entries(event.request.headers)
         .find(([name]) => name.toLowerCase() === 'idempotency-key')?.[1];
