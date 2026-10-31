@@ -295,7 +295,7 @@ test('concurrent batch start is blocked even before the first job is accepted', 
   assert.equal(dashboard.payloads.length, 1);
   await dashboard.submit();
   assert.equal(dashboard.payloads.length, 1);
-  assert.match(JSON.stringify(dashboard.render()), /Wait for the accepted camera jobs/);
+  assert.match(JSON.stringify(dashboard.render()), /Wait for the accepted detection jobs/);
   release();
   await first;
   assert.equal(dashboard.payloads.length, 9);
@@ -349,3 +349,27 @@ for (const source of ['', 'http://example/video.mp4', 'https://user:pass@example
     assert.match(JSON.stringify(dashboard.render()), /Invalid video source/);
   });
 }
+
+test('single-video submission in progress never claims to queue nine camera jobs', async () => {
+  let release;
+  const submissionGate = new Promise((resolve) => { release = resolve; });
+  const dashboard = await createDashboard({ submissionGate });
+  dashboard.render();
+  await new Promise((resolve) => setImmediate(resolve));
+  dashboard.render().find((node) => node.props.id === 'videoSource').props.onChange({ target: { value: 'https://approved.example/video.mp4' } });
+  const submitting = dashboard.render().filter((node) => node.type === 'form')[1].props.onSubmit({ preventDefault() {} });
+  const pending = JSON.stringify(dashboard.render());
+  assert.match(pending, /Submitting detection jobs/);
+  assert.doesNotMatch(pending, /Queueing 9|accepted camera jobs/);
+  release();
+  await submitting;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(dashboard.payloads.length, 1);
+  assert.match(JSON.stringify(dashboard.render()), /accepted detection jobs/);
+  dashboard.setStatus('failed');
+  await dashboard.poll();
+  const failed = JSON.stringify(dashboard.render());
+  assert.match(failed, /some detection jobs failed/);
+  assert.doesNotMatch(failed, /some camera jobs failed/);
+  assert.equal(dashboard.render().filter((node) => node.type === 'JobStatusCard').length, 1);
+});

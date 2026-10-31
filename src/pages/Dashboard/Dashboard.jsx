@@ -235,7 +235,7 @@ export default function Dashboard() {
       })
       .catch((error) => {
         if (active && error.name !== 'AbortError') {
-          setMonitorRecoveryError(`Cannot restore accepted jobs: ${error.message}. New batches remain blocked; retry recovery.`);
+          setMonitorRecoveryError(`Cannot restore accepted jobs: ${error.message}. New submissions remain blocked; retry recovery.`);
           setRecoveringMonitor(false);
         }
       });
@@ -273,11 +273,11 @@ export default function Dashboard() {
     }
     setFrameCountError(null);
     if (recoveringMonitorRef.current) {
-      setBatchStartError('Accepted job recovery must finish before starting a new batch.');
+      setBatchStartError('Accepted job recovery must finish before starting a new submission.');
       return;
     }
     if (startingJobRef.current || monitoredJobsRef.current.some((jobItem) => !isTerminalStatus(jobItem.status))) {
-      setBatchStartError('Wait for the accepted camera jobs to finish before starting another batch. Monitoring continues.');
+      setBatchStartError('Wait for the accepted detection jobs to finish before starting another submission. Monitoring continues.');
       return;
     }
     setBatchStartError(null);
@@ -531,11 +531,11 @@ export default function Dashboard() {
 
       <SectionCard
         title="Detection Job Monitor"
-        description={`One detection job is queued for each of ${totalFixedCameras} fixed cameras, then each pending/running job is refreshed every second.`}
+        description={`Submit a batch across ${totalFixedCameras} fixed cameras or one approved HTTPS video. Each pending/running job is refreshed every second.`}
       >
         <form className={styles.jobForm} onSubmit={(event) => handleStartJob(event)}>
           <label className={styles.checkboxLabel} htmlFor="maxFrames">
-            Frames per camera (1-300)
+            Frames per source (1-300)
             <input
               id="maxFrames"
               type="number"
@@ -563,19 +563,19 @@ export default function Dashboard() {
             Save frames
           </label>
           <button type="submit" className={styles.retryBtn} disabled={startingJob || activeJobsCount > 0 || recoveringMonitor || Boolean(monitorRecoveryError)}>
-            {startingJob ? `Queueing ${totalFixedCameras} detection jobs...` : `Run detection across ${totalFixedCameras} cameras`}
+            {startingJob ? 'Submitting detection jobs...' : `Run detection across ${totalFixedCameras} cameras`}
           </button>
         </form>
         <section aria-label="Single video detection">
           <h3>Run one approved HTTPS video</h3>
-          <p>Uses the Frames per camera limit above as the frame limit for this video, and the same Save frames setting.
+          <p>Uses the Frames per source limit above as the frame limit for this video, and the same Save frames setting.
             The operator must explicitly approve the exact source URL on the backend allowlist before running it.
             Backend rejection is shown as a job submission error; this app never bypasses approval.</p>
           <form className={styles.jobForm} onSubmit={handleVideoJob}>
             <label htmlFor="videoSource">Approved HTTPS video URL</label>
             <input id="videoSource" type="url" required value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} />
             <button type="submit" disabled={startingJob || activeJobsCount > 0 || recoveringMonitor || Boolean(monitorRecoveryError)}>
-              Run single video
+              {startingJob ? 'Submission in progress...' : 'Run single video'}
             </button>
           </form>
           {videoUrlError && <p role="alert">{videoUrlError}</p>}
@@ -591,15 +591,15 @@ export default function Dashboard() {
             CSV source timing is distinct from the processing elapsed time displayed in results. Saved annotated frames and heuristic scores do not establish accuracy.</p>
         </section>
         <p id="frame-count-hint" className={styles.monitorHint}>
-          Each camera job processes up to the selected frame count (default 120), not continuous monitoring.
+          Each source job processes up to the selected frame count (default 120), not continuous monitoring.
           Larger counts take longer; pending and running jobs continue to refresh until they finish.
         </p>
         {frameCountError && <p role="alert">{frameCountError}</p>}
         {activeJobsCount > 0 && (
-          <p role="status">Another batch can start after all accepted camera jobs finish. Monitoring continues for pending and running jobs.</p>
+          <p role="status">Another submission can start after all accepted detection jobs finish. Monitoring continues for pending and running jobs.</p>
         )}
         {batchStartError && <p role="alert">{batchStartError}</p>}
-        {recoveringMonitor && <p role="status">Restoring accepted camera jobs before allowing new submissions...</p>}
+        {recoveringMonitor && <p role="status">Restoring accepted detection jobs before allowing new submissions...</p>}
         {monitorRecoveryError && (
           <div role="alert">
             <p>{monitorRecoveryError}</p>
@@ -630,10 +630,10 @@ export default function Dashboard() {
                 <strong>All {monitoredJobs.length} detection jobs finished: {completedJobsCount} complete, {failedJobsCount} failed.</strong>
                 <span>
                   {failedJobsCount > 0
-                    ? 'Detection results are incomplete because some camera jobs failed.'
+                    ? 'Detection results are incomplete because some detection jobs failed.'
                     : accidentJobsCount === 0
                     ? '0 accidents detected.'
-                    : `${accidentJobsCount} camera${accidentJobsCount > 1 ? 's' : ''} reported accident events.`}
+                    : `${accidentJobsCount} detection job${accidentJobsCount > 1 ? 's' : ''} reported accident events.`}
                 </span>
               </>
             )}
