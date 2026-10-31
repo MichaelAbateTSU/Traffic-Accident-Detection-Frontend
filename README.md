@@ -132,6 +132,8 @@ src/
 
 Run the focused API URL, Dashboard job-submission, and interleaved camera/incident selection regression checks with `npm test` (Node's VM modules flag supplies Vite's environment and isolated UI dependencies to the test modules; Node may emit an experimental-feature warning).
 
+The suite also mounts the real React Dashboard in headless Chrome for independent job polling, navigation/partial-batch recovery, and rapid acceptance/status interleaving regressions. API transport is mocked, and network policy blocks external camera/media/backend access. Chrome is discovered at standard Linux paths; set `CHROME_PATH` to an executable elsewhere. Only this browser test skips if Chrome is unavailable (an explicitly invalid `CHROME_PATH` fails). Run it alone with `node --experimental-vm-modules --test tests/monitor-mounted.test.js`.
+
 | Function | Endpoint |
 |---|---|
 | `getDashboard(options)` | `GET /dashboard` |
