@@ -72,6 +72,30 @@ VITE_ROUTER_MODE=hash npm run build
 VITE_BASE_PATH=/Traffic-Accident-Detection-Frontend/ npm run preview
 ```
 
+## Free production hosting (Render static site)
+
+`render.yaml` defines a **static site**, not a paid Node web service or an inference server. It preserves the separate GitHub Pages workflow. **Render deployment is prepared, not live:** no authorized Render account is connected and no public backend URL is available yet. A working frontend does not host YOLO or make the backend continuously available.
+
+1. Sign in to your existing authorized Render account and connect this repository. Choose **New > Blueprint** and use the root `render.yaml` on `main` after these changes are merged. Review that the resource is a **Static Site** and do not add paid resources. Alternatively, choose **New > Static Site** with branch `main`, build command `npm ci && npm test && npm run build:render`, publish directory `dist`, and Node version `22`.
+2. When a backend exists, supply `VITE_API_BASE_URL` with its actual public HTTPS base URL, including its API prefix if needed. The Blueprint prompts for this value (`sync: false`); it is public build configuration, **not a secret**. Until then, leave it unset/empty and explicitly set `VITE_ALLOW_UNCONFIGURED_BACKEND=true` to publish only the **Backend not configured** screen. The Blueprint includes that opt-in. If Blueprint creation requires a nonempty URL, use the manual Static Site setup and omit `VITE_API_BASE_URL`; never invent a URL. Do not add an operator token to Render environment variables. For manual setup, also set `NODE_VERSION=22`.
+3. For manual setup, add **Redirects/Rewrites**: source `/*`, destination `/index.html`, action **Rewrite**. The Blueprint includes this rule. Existing files remain served normally; unknown client routes load the app. The Render build explicitly uses root assets (`/`) and history routing, so `/incidents`, `/settings` and `/camera/:id` must survive direct navigation and refresh.
+4. Configure backend CORS to allow the **actual Render site origin** shown in its dashboard, such as `https://<assigned-name>.onrender.com`, without a trailing slash/path. Allow GET/POST/PATCH and `Content-Type`/`Authorization`, and expose `Content-Disposition`. Keep the backend token and exact source allowlist on the backend; deploying a frontend does not approve any video source.
+5. Deploy, open the assigned HTTPS URL, sign in with the operator-entered token, and verify a permitted job, terminal status, saved frames, and a refreshed nested route. Do not describe detection as live until this succeeds against the real backend.
+
+The build runs the existing tests and `build:render`, which overrides any Pages base/hash settings. Without the explicit unavailable-backend opt-in, a missing backend URL fails with the existing public-HTTPS configuration error. With it, the unavailable screen states that monitoring, detection and operator access are disabled and makes no API requests. Invalid configured URLs always fail, even with the opt-in; there is no localhost/dummy fallback or fake live dashboard. API authentication and token memory-only handling are unchanged. Updating `VITE_API_BASE_URL` requires a new build/deploy; changing the GitHub Actions repository variable alone does not change Render. Once configured, the opt-in may be removed or set to `false` to require a backend URL on future builds.
+
+To reproduce the Render build locally:
+
+```bash
+npm test
+VITE_API_BASE_URL=https://your-real-backend.example npm run build:render
+VITE_BASE_PATH=/ npm run preview
+```
+
+To build just the unavailable screen, instead run `VITE_ALLOW_UNCONFIGURED_BACKEND=true npm run build:render` with `VITE_API_BASE_URL` and legacy `VITE_API_URL` unset.
+
+Render static hosting provides HTTPS/CDN delivery without a continuously running application process. Its free usage is subject to the account's current included outbound bandwidth and build-pipeline limits; it is not an unlimited-capacity or availability guarantee. Check [static-site documentation](https://render.com/docs/static-sites), [free-service limits](https://render.com/docs/free), and [pricing](https://render.com/pricing) before enabling deployment, and do not authorize paid overages or upgrades. Exact current quotas could not be verified from this implementation environment. Backend hosting is separate: a free Render web service can idle/spin down, restart and lose ephemeral files, and has resource/usage limits; it does **not** guarantee always-on YOLO inference or durable saved frames. Do not switch the backend to a paid instance to work around these limits without explicit authorization.
+
 ## Project Structure
 
 ```
