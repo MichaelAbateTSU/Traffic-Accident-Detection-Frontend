@@ -1,0 +1,60 @@
+name: Isolated synthetic browser restart smoke
+
+on:
+  push:
+    branches: [michaelabatetsu-synthetic-browser-smoke]
+    paths:
+      - .github/workflows/synthetic-browser-smoke.yml
+      - experiments/synthetic-browser/**
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: MichaelAbateTSU/Traffic-Accident-Detection
+          ref: b76b56a4444d4c35081e1cee5413341a019a59b7
+          fetch-depth: 0
+          persist-credentials: false
+          path: backend
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 4c3e2257d7d27265322fdd2319ec79c906b54584
+          persist-credentials: false
+          path: frontend
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+      - name: Build exact applications before any live admission
+        run: |
+          test "$(git -C backend rev-parse HEAD)" = b76b56a4444d4c35081e1cee5413341a019a59b7
+          test "$(git -C frontend rev-parse HEAD)" = 4c3e2257d7d27265322fdd2319ec79c906b54584
+          cd frontend
+          npm ci --quiet
+          npm test
+          VITE_API_BASE_URL=https://api.integration.test:8453 npm run build:render
+          cd ..
+          docker build --quiet --platform linux/amd64 --build-arg TARGETARCH=amd64 -t traffic-live-smoke backend
+          docker build --quiet -f backend/deploy/Dockerfile.egress -t traffic-live-egress backend
+          docker pull --quiet caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+          command -v google-chrome
+      - name: Run actual synthetic saved-image and restart check without uploading media
+        env:
+          EXPERIMENT_REVISION: ${{ github.sha }}
+        run: |
+          sudo swapoff --all
+          python experiments/synthetic-browser/orchestrate.py
+      - name: Remove temporary services on failure or cancellation
+        if: always()
+        run: |
+          docker rm -f -v r2-browser-https r2-browser-api r2-browser-egress >/dev/null 2>&1 || true
+          docker network rm r2-browser-private r2-browser-internet >/dev/null 2>&1 || true
+          docker volume rm synthetic-browser-data >/dev/null 2>&1 || true
