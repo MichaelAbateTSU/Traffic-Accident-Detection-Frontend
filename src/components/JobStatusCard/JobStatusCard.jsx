@@ -128,7 +128,7 @@ export default function JobStatusCard({ job }) {
             {job.events.map((eventItem, index) => (
               <div key={`${eventItem.incidentId ?? 'event'}-${eventItem.frameIdx ?? index}`} className={styles.eventCard}>
                 <span><strong>Frame:</strong> {eventItem.frameIdx ?? '—'}</span>
-                <span><strong>Timestamp:</strong> {eventItem.timestampSec ?? '—'}s</span>
+                <span><strong>Processing elapsed time:</strong> {eventItem.timestampSec ?? '—'}s (wall-clock since job start, not source-video time)</span>
                 <span><strong>Detected:</strong> {eventItem.accidentDetected == null ? '—' : eventItem.accidentDetected ? 'Yes' : 'No'}</span>
                 <span><strong>Heuristic accident score (0-1):</strong> {formatNumber(eventItem.confidenceScore, 2)}</span>
                 <span><strong>Raw heuristic score (0-1):</strong> {formatNumber(eventItem.rawScore, 2)}</span>

@@ -14,7 +14,7 @@ await apiModule.link(() => new SourceTextModule(configSource));
 await apiModule.evaluate();
 const { parseMaxFrames } = apiModule.namespace;
 
-async function createDashboard({ failAt = Infinity, status = 'pending' } = {}) {
+async function createDashboard({ failAt = Infinity, status = 'pending', submissionGate } = {}) {
   const slots = [];
   let cursor = 0;
   let submissions = 0;
@@ -59,6 +59,7 @@ async function createDashboard({ failAt = Infinity, status = 'pending' } = {}) {
       parseMaxFrames,
       async startDetectionJob(payload) {
         payloads.push(payload);
+        if (submissionGate) await submissionGate;
         if (submissions++ === failAt) throw new Error('Submission unavailable');
         return { item: { id: `job-${submissions}`, status, peakConfidence: 0.87 } };
       },
@@ -147,9 +148,24 @@ for (const [label, failAt, accepted] of [
     assert.equal(dashboard.refreshedIds.length, accepted * 2);
     assert.equal(warnings().length, failAt === Infinity ? 0 : 1);
 
+    const previousPayloads = dashboard.payloads.length;
     await dashboard.submit();
     assert.equal(dashboard.timers.size, 1);
-    assert.equal(warnings().length, 0);
+    if (accepted) {
+      assert.equal(dashboard.payloads.length, previousPayloads);
+      assert.equal(warnings().length, failAt === Infinity ? 0 : 1);
+      assert.match(JSON.stringify(dashboard.render()), /Monitoring continues/);
+      dashboard.setStatus('complete');
+      await dashboard.poll();
+      assert.equal(dashboard.timers.size, 0);
+      dashboard.setStatus('pending');
+      await dashboard.submit();
+      assert.equal(dashboard.payloads.length, previousPayloads + 9);
+      assert.equal(warnings().length, 0);
+      assert.equal(dashboard.timers.size, 1);
+    } else {
+      assert.equal(warnings().length, 0);
+    }
   });
 }
 
@@ -187,6 +203,10 @@ for (const finalStatus of ['complete', 'failed']) {
     assert.equal(summary.props.children.join(''), finalStatus === 'failed'
       ? 'All 9 detection jobs finished: 0 complete, 9 failed.'
       : 'All 9 detection jobs finished: 9 complete, 0 failed.');
+    dashboard.setStatus('pending');
+    await dashboard.submit();
+    assert.equal(dashboard.payloads.length, 18);
+    assert.equal(dashboard.timers.size, 1);
   });
 }
 
@@ -230,7 +250,28 @@ for (const frames of ['', '0', '301', '-1', '1.5', 'NaN', 'Infinity', '1e2', ' 1
     assert.equal(dashboard.render().filter((node) => node.type === 'JobStatusCard').length, submitted);
     assert.match(JSON.stringify(dashboard.render().find((node) => node.props.role === 'alert')), /whole number from 1 to 300/);
     dashboard.render().find((node) => node.props.id === 'maxFrames').props.onChange({ target: { value: '300' } });
+    dashboard.setStatus('complete');
+    await dashboard.poll();
+    dashboard.setStatus('pending');
     await dashboard.submit();
     assert.ok(dashboard.payloads.slice(submitted).every((payload) => payload.max_frames === 300));
   });
 }
+
+test('concurrent batch start is blocked even before the first job is accepted', async () => {
+  let release;
+  const submissionGate = new Promise((resolve) => { release = resolve; });
+  const dashboard = await createDashboard({ submissionGate });
+  const first = dashboard.submit();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(dashboard.payloads.length, 1);
+  await dashboard.submit();
+  assert.equal(dashboard.payloads.length, 1);
+  assert.match(JSON.stringify(dashboard.render()), /Wait for the accepted camera jobs/);
+  release();
+  await first;
+  assert.equal(dashboard.payloads.length, 9);
+  assert.equal(dashboard.timers.size, 1);
+  const button = dashboard.render().find((node) => node.type === 'button' && node.props.type === 'submit');
+  assert.equal(button.props.disabled, true);
+});

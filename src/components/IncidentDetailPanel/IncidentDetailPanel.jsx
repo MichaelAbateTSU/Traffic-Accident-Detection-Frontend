@@ -78,7 +78,7 @@ export default function IncidentDetailPanel({ incident, onIncidentUpdated }) {
         <span><strong>Detected:</strong> {formatDateTime(current.detectedAt)}</span>
         <span><strong>Resolved at:</strong> {current.resolvedAt ? formatDateTime(current.resolvedAt) : '—'}</span>
         <span><strong>Frame index:</strong> {current.frameIdx ?? '—'}</span>
-        <span><strong>Timestamp sec:</strong> {current.timestampSec ?? '—'}</span>
+        <span><strong>Processing elapsed time:</strong> {current.timestampSec ?? '—'}s (wall-clock since job start, not source-video time)</span>
         <span><strong>Heuristic accident score (0-1):</strong> {formatNumber(current.confidenceScore, 2)}</span>
         <span><strong>Raw heuristic score (0-1):</strong> {formatNumber(current.rawScore, 2)}</span>
         <span><strong>Tracks:</strong> {current.involvedTrackIds?.join(', ') || '—'}</span>

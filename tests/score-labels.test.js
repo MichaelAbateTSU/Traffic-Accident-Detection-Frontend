@@ -7,6 +7,7 @@ import * as formatters from '../src/utils/formatters.js';
 const incident = {
   id: 'event-1', cameraId: 'CAM-01', confidenceScore: 0.87, confidence: 0.87,
   rawScore: 0.92, resolved: false, status: 'active', frameIdx: 10,
+  timestampSec: 12.5,
 };
 const recharts = Object.fromEntries([
   'CartesianGrid', 'Line', 'LineChart', 'ResponsiveContainer', 'Tooltip', 'XAxis', 'YAxis',
@@ -31,6 +32,11 @@ for (const [path, props] of [
     assert.match(output, /0\.87/);
     assert.doesNotMatch(output, /87(?:\.0+)?%/);
     if (!props.compact) assert.match(output, /0\.92/);
+    if (path.includes('JobStatusCard') || path.includes('IncidentDetailPanel')) {
+      assert.match(output, /Processing elapsed time/);
+      assert.match(output, /wall-clock since job start, not source-video time/);
+      assert.match(output, /12\.5/);
+    }
     harness.unmount();
   });
 }

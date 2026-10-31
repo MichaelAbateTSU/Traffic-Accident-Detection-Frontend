@@ -100,6 +100,7 @@ export default function Dashboard() {
   const [saveFrames, setSaveFrames] = useState(false);
   const [maxFrames, setMaxFrames] = useState('120');
   const [frameCountError, setFrameCountError] = useState(null);
+  const [batchStartError, setBatchStartError] = useState(null);
   const [startingJob, setStartingJob] = useState(false);
   const [monitoredJobs, setMonitoredJobs] = useState([]);
   const [jobError, setJobError] = useState(null);
@@ -109,6 +110,7 @@ export default function Dashboard() {
   const pollingTimerRef = useRef(null);
   const refreshingJobsRef = useRef(false);
   const monitoredJobsRef = useRef([]);
+  const startingJobRef = useRef(false);
 
   const {
     stats,
@@ -183,6 +185,7 @@ export default function Dashboard() {
           };
         });
         allCompleteAfterRefresh = next.length > 0 && next.every((jobItem) => isTerminalStatus(jobItem.status));
+        monitoredJobsRef.current = next;
         return next;
       });
 
@@ -191,6 +194,7 @@ export default function Dashboard() {
 
       if (allCompleteAfterRefresh) {
         stopBatchPolling();
+        setBatchStartError(null);
       }
     } finally {
       refreshingJobsRef.current = false;
@@ -213,6 +217,12 @@ export default function Dashboard() {
       return;
     }
     setFrameCountError(null);
+    if (startingJobRef.current || monitoredJobsRef.current.some((jobItem) => !isTerminalStatus(jobItem.status))) {
+      setBatchStartError('Wait for the accepted camera jobs to finish before starting another batch. Monitoring continues.');
+      return;
+    }
+    setBatchStartError(null);
+    startingJobRef.current = true;
 
     setStartingJob(true);
     stopBatchPolling();
@@ -264,6 +274,7 @@ export default function Dashboard() {
         reload();
       }
       setStartingJob(false);
+      startingJobRef.current = false;
     }
   }
 
@@ -463,7 +474,7 @@ export default function Dashboard() {
             />
             Save frames
           </label>
-          <button type="submit" className={styles.retryBtn} disabled={startingJob}>
+          <button type="submit" className={styles.retryBtn} disabled={startingJob || activeJobsCount > 0}>
             {startingJob ? `Queueing ${totalFixedCameras} detection jobs...` : `Run detection across ${totalFixedCameras} cameras`}
           </button>
         </form>
@@ -472,6 +483,10 @@ export default function Dashboard() {
           Larger counts take longer; pending and running jobs continue to refresh until they finish.
         </p>
         {frameCountError && <p role="alert">{frameCountError}</p>}
+        {activeJobsCount > 0 && (
+          <p role="status">Another batch can start after all accepted camera jobs finish. Monitoring continues for pending and running jobs.</p>
+        )}
+        {batchStartError && <p role="alert">{batchStartError}</p>}
 
         <p className={styles.monitorHint}>
           Jobs are queued as <strong>pending</strong>, advance to <strong>running</strong> as processing begins, then end as
