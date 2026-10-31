@@ -12,7 +12,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parent
 SOURCE = "https://media.githubusercontent.com/media/accidentbench/accidentbench.github.io/main/assets/videos/synthetic/Town03_head-on_clear_30.mp4"
-BACKEND = "fe2a06a64f9fb92ed6039f31040f53f2b3d158fb"
+BACKEND = "123295ed7dfa8146303a30f31b67c0d2373a13ff"
 FRONTEND = "f93f98f009799d7e72c42397a64042427a738682"
 CADDY = "caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
 environment = os.environ.copy()

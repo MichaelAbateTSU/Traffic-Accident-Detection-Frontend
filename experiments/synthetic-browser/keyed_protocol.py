@@ -6,6 +6,7 @@ import socket
 import ssl
 import sys
 import time
+import threading
 import uuid
 from pathlib import Path
 
@@ -45,6 +46,69 @@ def request(method, path, key=None, body=None, authorization=token, discard=Fals
         connection.close()
 
 
+def lose_entire_response(key):
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    listener.settimeout(15)
+    port = listener.getsockname()[1]
+    evidence = {}
+
+    def boundary():
+        try:
+            with listener.accept()[0] as downstream:
+                downstream.settimeout(10)
+                # Forward the real client body/auth to production HTTPS, but no response bytes.
+                upstream = Connection("api.integration.test", 8453, context=context, timeout=10)
+                upstream.connect()
+                pending = b""
+                while b"\r\n\r\n" not in pending:
+                    pending += downstream.recv(4096)
+                    assert len(pending) < 16384
+                headers, body = pending.split(b"\r\n\r\n", 1)
+                length = int(next(line.split(b":", 1)[1] for line in headers.split(b"\r\n") if line.lower().startswith(b"content-length:")))
+                while len(body) < length:
+                    body += downstream.recv(length - len(body))
+                upstream.sock.sendall(headers + b"\r\n\r\n" + body)
+                response = http.client.HTTPResponse(upstream.sock)
+                response.begin()
+                assert response.status == 202
+                receipt = json.loads(response.read())
+                assert receipt["replayed"] is False
+                evidence["job_id"] = receipt["job_id"]
+                # Confirm durable admission via the real key-only endpoint before disconnect.
+                status, found = request("GET", "/detection-submissions/v1", key)
+                assert status == 200 and found["job_id"] == receipt["job_id"]
+                evidence["admitted"] = True
+                upstream.close()
+        except Exception as error:
+            evidence["error"] = type(error).__name__
+        finally:
+            listener.close()
+
+    worker = threading.Thread(target=boundary)
+    worker.start()
+    client = http.client.HTTPConnection("127.0.0.1", port, timeout=15)
+    try:
+        client.request("POST", "/detection-submissions/v1", json.dumps(BODY), {
+            "Host": "api.integration.test:8453", "Authorization": "Bearer " + token,
+            "Origin": "https://frontend.integration.test:8454",
+            "Content-Type": "application/json", "Idempotency-Key": key,
+        })
+        try:
+            client.getresponse()
+        except http.client.RemoteDisconnected:
+            evidence["client_no_status"] = True
+        else:
+            raise AssertionError("Lost-response client unexpectedly received headers")
+    finally:
+        client.close()
+        worker.join(timeout=20)
+    assert not worker.is_alive() and "error" not in evidence
+    assert evidence["admitted"] and evidence["client_no_status"]
+    return evidence["job_id"]
+
+
 try:
     result_file = Path(os.environ["RESULT_FILE"])
     if phase == "initial":
@@ -56,11 +120,12 @@ try:
         status, payload = request("GET", "/detection-submissions/v1", key)
         assert status == 404 and payload["detail"]["code"] == "idempotency_key_unknown"
         stage = "lost_admission_response"
-        assert request("POST", "/detection-submissions/v1", key, BODY, discard=True)[0] == 202
+        admitted_job_id = lose_entire_response(key)
         stage = "key_only_reconciliation"
         status, receipt = request("GET", "/detection-submissions/v1", key)
         assert status == 200 and receipt["replayed"] is True
         job_id = receipt["job_id"]
+        assert job_id == admitted_job_id
         stage = "identical_retry"
         status, retry = request("POST", "/detection-submissions/v1", key, BODY)
         assert status == 200 and retry["replayed"] and retry["job_id"] == job_id
@@ -99,7 +164,8 @@ try:
         "phase": phase, "job_status": job["status"], "frames_processed": job["frames_processed"],
         "peak_heuristic_score": job["peak_confidence"], "event_count": len(job["events"]),
         "job_count": 1, "job_id_stable": True, "bad_auth_rejected": phase == "initial",
-        "key_only_unknown_404": phase == "initial", "receipt_body_deliberately_discarded": phase == "initial",
+        "key_only_unknown_404": phase == "initial", "client_received_no_status_headers_or_body": phase == "initial",
+        "boundary_confirmed_durable_admission_before_disconnect": phase == "initial",
         "same_key_retry_replayed": True, "differing_body_conflict_409": phase == "initial",
         "expired_get_post_410": phase == "initial", "result_identical_after_restart": phase == "recovery",
         "temporary_ca_https_verified": True, "real_camera_hosts_contacted": 0,

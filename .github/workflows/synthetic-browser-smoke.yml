@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: MichaelAbateTSU/Traffic-Accident-Detection
-          ref: fe2a06a64f9fb92ed6039f31040f53f2b3d158fb
+          ref: 123295ed7dfa8146303a30f31b67c0d2373a13ff
           fetch-depth: 0
           persist-credentials: false
           path: backend
@@ -35,7 +35,7 @@ jobs:
           node-version: 22
       - name: Build exact applications before any live admission
         run: |
-          test "$(git -C backend rev-parse HEAD)" = fe2a06a64f9fb92ed6039f31040f53f2b3d158fb
+          test "$(git -C backend rev-parse HEAD)" = 123295ed7dfa8146303a30f31b67c0d2373a13ff
           test "$(git -C frontend rev-parse HEAD)" = f93f98f009799d7e72c42397a64042427a738682
           cd frontend
           npm ci --quiet
