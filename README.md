@@ -84,15 +84,22 @@ VITE_BASE_PATH=/Traffic-Accident-Detection-Frontend/ npm run preview
 
 The build runs the existing tests and `build:render`, which overrides any Pages base/hash settings. Without the explicit unavailable-backend opt-in, a missing backend URL fails with the existing public-HTTPS configuration error. With it, the unavailable screen states that monitoring, detection and operator access are disabled and makes no API requests. Invalid configured URLs always fail, even with the opt-in; there is no localhost/dummy fallback or fake live dashboard. API authentication and token memory-only handling are unchanged. Updating `VITE_API_BASE_URL` requires a new build/deploy; changing the GitHub Actions repository variable alone does not change Render. Once configured, the opt-in may be removed or set to `false` to require a backend URL on future builds.
 
-To reproduce the Render build locally:
+To reproduce the Render build locally on Windows, macOS or Linux, set the public configuration in an untracked `.env.local` file:
+
+```env
+VITE_API_BASE_URL=https://your-real-backend.example
+VITE_BASE_PATH=/
+```
+
+Then run:
 
 ```bash
 npm test
-VITE_API_BASE_URL=https://your-real-backend.example npm run build:render
-VITE_BASE_PATH=/ npm run preview
+npm run build:render
+npm run preview
 ```
 
-To build just the unavailable screen, instead run `VITE_ALLOW_UNCONFIGURED_BACKEND=true npm run build:render` with `VITE_API_BASE_URL` and legacy `VITE_API_URL` unset.
+To build just the unavailable screen, remove `VITE_API_BASE_URL` and legacy `VITE_API_URL` from both the environment and `.env.local`, add `VITE_ALLOW_UNCONFIGURED_BACKEND=true` to `.env.local`, and run `npm run build:render`. The Node build entry point forces root assets and history routing even if ambient environment variables or local files contain Pages settings; it does not override backend URL validation or the unavailable-state opt-in. Preview defaults to `/`; remove any ambient Pages `VITE_BASE_PATH` before previewing.
 
 Render static hosting provides HTTPS/CDN delivery without a continuously running application process. Its free usage is subject to the account's current included outbound bandwidth and build-pipeline limits; it is not an unlimited-capacity or availability guarantee. Check [static-site documentation](https://render.com/docs/static-sites), [free-service limits](https://render.com/docs/free), and [pricing](https://render.com/pricing) before enabling deployment, and do not authorize paid overages or upgrades. Exact current quotas could not be verified from this implementation environment. Backend hosting is separate: a free Render web service can idle/spin down, restart and lose ephemeral files, and has resource/usage limits; it does **not** guarantee always-on YOLO inference or durable saved frames. Do not switch the backend to a paid instance to work around these limits without explicit authorization.
 

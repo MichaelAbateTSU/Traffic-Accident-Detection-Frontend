@@ -1,19 +1,42 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import vm from 'node:vm';
 import { validateProductionBuild } from '../src/config.js';
 
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const blueprint = readFileSync(new URL('../render.yaml', import.meta.url), 'utf8');
 
-test('Render build pins root history routing and requires explicit missing-backend opt-in', () => {
-  const command = packageJson.scripts['build:render'];
-  const assignments = Object.fromEntries(command.split(' ').filter((part) => part.includes('=')).map((part) => part.split('=')));
-  assert.deepEqual(assignments, {
-    VITE_BASE_PATH: '/',
-    VITE_ROUTER_MODE: 'history',
+test('cross-platform Render entry point forces root/history before building and preserves backend settings', async () => {
+  assert.equal(packageJson.scripts['build:render'], 'node scripts/build-render.js');
+  const env = {
+    VITE_BASE_PATH: '/Traffic-Accident-Detection-Frontend/',
+    VITE_ROUTER_MODE: 'hash',
+    VITE_API_BASE_URL: 'https://backend.example/api/v1',
+    VITE_ALLOW_UNCONFIGURED_BACKEND: 'true',
+  };
+  const context = vm.createContext({ process: { env } });
+  let buildCalls = 0;
+  const vite = new vm.SyntheticModule(['build'], function () {
+    this.setExport('build', async () => {
+      buildCalls++;
+      assert.equal(env.VITE_BASE_PATH, '/');
+      assert.equal(env.VITE_ROUTER_MODE, 'history');
+      assert.equal(env.VITE_API_BASE_URL, 'https://backend.example/api/v1');
+      assert.equal(env.VITE_ALLOW_UNCONFIGURED_BACKEND, 'true');
+    });
+  }, { context });
+  const entry = new vm.SourceTextModule(readFileSync(new URL('../scripts/build-render.js', import.meta.url), 'utf8'), { context });
+  await entry.link((specifier) => {
+    assert.equal(specifier, 'vite');
+    return vite;
   });
-  assert.match(command, /vite build$/);
+  await entry.evaluate();
+  assert.equal(buildCalls, 1);
+});
+
+test('Render retains production validation and requires explicit missing-backend opt-in', () => {
+  const assignments = { VITE_BASE_PATH: '/', VITE_ROUTER_MODE: 'history' };
   assert.throws(() => validateProductionBuild(assignments), /public HTTPS/);
   assert.throws(() => validateProductionBuild({ ...assignments, VITE_API_BASE_URL: 'http://localhost:8000' }), /public HTTPS/);
   assert.doesNotThrow(() => validateProductionBuild({ ...assignments, VITE_API_BASE_URL: 'https://backend.example/api/v1' }));
