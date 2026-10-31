@@ -1,12 +1,26 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { fetchArtifactBlob } from '../../services/api.js';
 
-export default function AuthenticatedImage({ src, alt, openLink = false, ...props }) {
+export default function AuthenticatedImage({ src, alt, openLink = false, loading, ...props }) {
   const [state, setState] = useState({ src: null, url: null, error: null });
+  const [visible, setVisible] = useState(loading !== 'lazy' || typeof IntersectionObserver === 'undefined');
+  const containerRef = useRef(null);
   const current = state.src === src ? state : { url: null, error: null };
 
   useEffect(() => {
-    if (!src) return undefined;
+    if (visible || loading !== 'lazy' || typeof IntersectionObserver === 'undefined') return undefined;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        setVisible(true);
+        observer.disconnect();
+      }
+    }, { rootMargin: '100px' });
+    if (containerRef.current) observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, [visible, loading]);
+
+  useEffect(() => {
+    if (!src || !visible) return undefined;
     const controller = new AbortController();
     let active = true;
     let objectUrl;
@@ -25,16 +39,17 @@ export default function AuthenticatedImage({ src, alt, openLink = false, ...prop
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [src]);
+  }, [src, visible]);
 
-  if (!src) return <span>No image available</span>;
-  if (current.error) return <span role="alert">Image unavailable: {current.error}</span>;
-  if (!current.url) return <span role="status">Loading image...</span>;
+  if (!src) return <span ref={containerRef}>No image available</span>;
+  if (current.error) return <span ref={containerRef} role="alert">Image unavailable: {current.error}</span>;
+  if (!current.url) return <span ref={containerRef} role="status" style={{ display: 'inline-block', minHeight: '100px' }}>Loading image...</span>;
   const image = (
     <img
       {...props}
       src={current.url}
       alt={alt}
+      loading={loading}
       onError={() => setState({ src, url: null, error: 'Unable to decode image.' })}
     />
   );

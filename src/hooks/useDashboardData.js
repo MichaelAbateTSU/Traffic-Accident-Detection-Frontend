@@ -29,7 +29,7 @@ export function useDashboardData({ incidentsPageSize = 5, incidentsStatus = 'act
           getDashboard({ incidentsPageSize, incidentsStatus, historyDays }, { signal: controller.signal }),
           getStats({ historyDays }, { signal: controller.signal }),
           getHealth({ signal: controller.signal }),
-          getJobs({ page: 1, pageSize: 8, sort: '-created_at' }, { signal: controller.signal }),
+          getJobs({ page: 1, pageSize: 9, sort: '-created_at' }, { signal: controller.signal }),
         ]);
         if (!mounted) return;
 

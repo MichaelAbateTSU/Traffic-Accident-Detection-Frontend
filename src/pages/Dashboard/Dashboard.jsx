@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import AuthenticatedImage from '../../components/AuthenticatedImage/AuthenticatedImage.jsx';
+import FrameGallery from '../../components/FrameGallery/FrameGallery.jsx';
 import StatCard from '../../components/StatCard/StatCard.jsx';
 import IncidentTable from '../../components/IncidentTable/IncidentTable.jsx';
 import AlertBanner from '../../components/AlertBanner/AlertBanner.jsx';
@@ -14,6 +14,7 @@ import StatusBadge from '../../components/StatusBadge/StatusBadge.jsx';
 import SectionCard from '../../components/SectionCard/SectionCard.jsx';
 import CameraPreviewCard from '../../components/CameraPreviewCard/CameraPreviewCard.jsx';
 import { getJob, parseMaxFrames, startDetectionJob } from '../../services/api.js';
+import { beginJobSubmission, endJobSubmission, recoverJobMonitor, saveJobMonitor } from '../../services/jobMonitor.js';
 import { FIXED_CAMERA_STREAM_URLS } from '../../constants/cameras.js';
 import { formatDateTime, formatNumber, formatPercent } from '../../utils/formatters.js';
 import { useDashboardData } from '../../hooks/useDashboardData.js';
@@ -106,11 +107,17 @@ export default function Dashboard() {
   const [jobError, setJobError] = useState(null);
   const [jobSubmissionError, setJobSubmissionError] = useState(null);
   const [selectedIncident, setSelectedIncident] = useState(null);
+  const [recoveringMonitor, setRecoveringMonitor] = useState(true);
+  const [monitorRecoveryError, setMonitorRecoveryError] = useState(null);
+  const [monitorStorageError, setMonitorStorageError] = useState(null);
+  const [recoveryKey, setRecoveryKey] = useState(0);
   const totalFixedCameras = FIXED_CAMERA_STREAM_URLS.length;
   const pollingTimerRef = useRef(null);
   const refreshingJobsRef = useRef(false);
   const monitoredJobsRef = useRef([]);
   const startingJobRef = useRef(false);
+  const recoveringMonitorRef = useRef(true);
+  const monitorMountedRef = useRef(true);
 
   const {
     stats,
@@ -164,6 +171,7 @@ export default function Dashboard() {
           }
         }),
       );
+      if (!monitorMountedRef.current) return;
 
       let allCompleteAfterRefresh = false;
       setMonitoredJobs((current) => {
@@ -202,7 +210,52 @@ export default function Dashboard() {
   }, [stopBatchPolling]);
 
   useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+    recoveringMonitorRef.current = true;
+    setRecoveringMonitor(true);
+    setMonitorRecoveryError(null);
+    recoverJobMonitor({ signal: controller.signal })
+      .then(({ jobs: recovered, warning, error: recoveryError }) => {
+        if (!active) return;
+        monitoredJobsRef.current = recovered.map(normalizeMonitorJob);
+        setMonitoredJobs(monitoredJobsRef.current);
+        setJobSubmissionError(warning);
+        setJobError(recoveryError);
+        persistMonitor(recovered.map((item) => item.id), warning);
+        if (recovered.some((item) => !isTerminalStatus(item.status))) {
+          stopBatchPolling();
+          pollingTimerRef.current = setInterval(refreshPendingJobs, JOB_POLL_INTERVAL_MS);
+          refreshPendingJobs();
+        }
+        recoveringMonitorRef.current = false;
+        setRecoveringMonitor(false);
+      })
+      .catch((error) => {
+        if (active && error.name !== 'AbortError') {
+          setMonitorRecoveryError(`Cannot restore accepted jobs: ${error.message}. New batches remain blocked; retry recovery.`);
+          setRecoveringMonitor(false);
+        }
+      });
     return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [recoveryKey, refreshPendingJobs, stopBatchPolling]);
+
+  function persistMonitor(ids, warning = null) {
+    try {
+      saveJobMonitor(ids, warning);
+      setMonitorStorageError(null);
+    } catch (error) {
+      setMonitorStorageError(`Cannot save job monitor for reload recovery: ${error.message}. Active jobs will still be recovered from the backend.`);
+    }
+  }
+
+  useEffect(() => {
+    monitorMountedRef.current = true;
+    return () => {
+      monitorMountedRef.current = false;
       stopBatchPolling();
     };
   }, [stopBatchPolling]);
@@ -217,12 +270,17 @@ export default function Dashboard() {
       return;
     }
     setFrameCountError(null);
+    if (recoveringMonitorRef.current) {
+      setBatchStartError('Accepted job recovery must finish before starting a new batch.');
+      return;
+    }
     if (startingJobRef.current || monitoredJobsRef.current.some((jobItem) => !isTerminalStatus(jobItem.status))) {
       setBatchStartError('Wait for the accepted camera jobs to finish before starting another batch. Monitoring continues.');
       return;
     }
     setBatchStartError(null);
     startingJobRef.current = true;
+    beginJobSubmission();
 
     setStartingJob(true);
     stopBatchPolling();
@@ -251,6 +309,7 @@ export default function Dashboard() {
             frames: mergeFrameImages([], item?.frames ?? []),
           }),
         );
+        persistMonitor(queuedResponses.map((job) => job.id));
       }
 
       if (!queuedResponses.length) {
@@ -258,23 +317,26 @@ export default function Dashboard() {
       }
     } catch (err) {
       console.error(err);
-      setJobSubmissionError(queuedResponses.length
+      const warning = queuedResponses.length
         ? `${queuedResponses.length} of ${totalFixedCameras} jobs started; submission stopped: ${err.message}`
-        : err.message);
+        : err.message;
+      setJobSubmissionError(warning);
+      persistMonitor(queuedResponses.map((job) => job.id), warning);
     } finally {
       if (queuedResponses.length) {
         monitoredJobsRef.current = queuedResponses;
         setMonitoredJobs(queuedResponses);
-        if (queuedResponses.some((jobItem) => !isTerminalStatus(jobItem.status))) {
+        if (monitorMountedRef.current && queuedResponses.some((jobItem) => !isTerminalStatus(jobItem.status))) {
           pollingTimerRef.current = setInterval(() => {
             refreshPendingJobs();
           }, JOB_POLL_INTERVAL_MS);
           refreshPendingJobs();
         }
-        reload();
+        if (monitorMountedRef.current) reload();
       }
       setStartingJob(false);
       startingJobRef.current = false;
+      endJobSubmission();
     }
   }
 
@@ -474,7 +536,7 @@ export default function Dashboard() {
             />
             Save frames
           </label>
-          <button type="submit" className={styles.retryBtn} disabled={startingJob || activeJobsCount > 0}>
+          <button type="submit" className={styles.retryBtn} disabled={startingJob || activeJobsCount > 0 || recoveringMonitor || Boolean(monitorRecoveryError)}>
             {startingJob ? `Queueing ${totalFixedCameras} detection jobs...` : `Run detection across ${totalFixedCameras} cameras`}
           </button>
         </form>
@@ -487,6 +549,14 @@ export default function Dashboard() {
           <p role="status">Another batch can start after all accepted camera jobs finish. Monitoring continues for pending and running jobs.</p>
         )}
         {batchStartError && <p role="alert">{batchStartError}</p>}
+        {recoveringMonitor && <p role="status">Restoring accepted camera jobs before allowing new submissions...</p>}
+        {monitorRecoveryError && (
+          <div role="alert">
+            <p>{monitorRecoveryError}</p>
+            <button type="button" onClick={() => setRecoveryKey((key) => key + 1)}>Retry job recovery</button>
+          </div>
+        )}
+        {monitorStorageError && <p role="alert">{monitorStorageError}</p>}
 
         <p className={styles.monitorHint}>
           Jobs are queued as <strong>pending</strong>, advance to <strong>running</strong> as processing begins, then end as
@@ -536,33 +606,7 @@ export default function Dashboard() {
             <h3 className={styles.framesTitle}>
               Frame Images - Job {latestJobWithFrames.id} ({latestJobWithFrames.frames.length})
             </h3>
-            <div className={styles.framesList}>
-              {latestJobWithFrames.frames.map((frame) => (
-                <article key={frame.frameIndex} className={styles.frameCard}>
-                  <div className={styles.frameHeader}>Frame {frame.frameIndex}</div>
-                  <div className={styles.frameGrid}>
-                    <figure>
-                      <figcaption>Original</figcaption>
-                      {frame.capture ? (
-                        <AuthenticatedImage src={frame.capture} alt={`Frame ${frame.frameIndex} original`} loading="lazy" openLink />
-                      ) : <div>No image</div>}
-                    </figure>
-                    <figure>
-                      <figcaption>Annotated</figcaption>
-                      {frame.captureAnnotated ? (
-                        <AuthenticatedImage src={frame.captureAnnotated} alt={`Frame ${frame.frameIndex} annotated`} loading="lazy" openLink />
-                      ) : <div>No image</div>}
-                    </figure>
-                    <figure>
-                      <figcaption>Pipeline Output</figcaption>
-                      {frame.pipelineOutput ? (
-                        <AuthenticatedImage src={frame.pipelineOutput} alt={`Frame ${frame.frameIndex} pipeline output`} loading="lazy" openLink />
-                      ) : <div>No image</div>}
-                    </figure>
-                  </div>
-                </article>
-              ))}
-            </div>
+            <FrameGallery frames={latestJobWithFrames.frames} jobId={latestJobWithFrames.id} />
           </div>
         )}
 

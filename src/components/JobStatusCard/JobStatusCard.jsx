@@ -1,4 +1,4 @@
-import AuthenticatedImage from '../AuthenticatedImage/AuthenticatedImage.jsx';
+import FrameGallery from '../FrameGallery/FrameGallery.jsx';
 import { formatDateTime, formatNumber } from '../../utils/formatters.js';
 import StatusBadge from '../StatusBadge/StatusBadge.jsx';
 import styles from './JobStatusCard.module.css';
@@ -18,29 +18,6 @@ function getDisplayStatus(status) {
   if (normalized === 'running') return 'in-progress';
   if (normalized === 'pending') return 'pending';
   return status ?? '—';
-}
-
-function FrameImageTile({ label, src, alt }) {
-  const hasImage = Boolean(src);
-
-  return (
-    <div className={styles.frameTile}>
-      <div className={styles.frameTileLabelRow}>
-        <span className={styles.frameTileLabel}>{label}</span>
-      </div>
-      {hasImage ? (
-        <AuthenticatedImage
-          src={src}
-          alt={alt}
-          className={styles.frameTileImage}
-          loading="lazy"
-          openLink
-        />
-      ) : (
-        <div className={styles.frameTileFallback}>Unavailable</div>
-      )}
-    </div>
-  );
 }
 
 function formatBoundingBox(boundingBox) {
@@ -95,28 +72,7 @@ export default function JobStatusCard({ job }) {
       <section className={styles.framesSection} aria-label="Job frame images">
         <div className={styles.sectionTitle}>Frame Images</div>
         {frames.length > 0 ? (
-          frames.map((frame) => (
-            <div key={frame.frameIndex} className={styles.frameRow}>
-              <div className={styles.frameIndex}>Frame #{frame.frameIndex}</div>
-              <div className={styles.frameTriplet}>
-                <FrameImageTile
-                  label="Original"
-                  src={frame.capture}
-                  alt={`Frame ${frame.frameIndex} original`}
-                />
-                <FrameImageTile
-                  label="Annotated"
-                  src={frame.captureAnnotated}
-                  alt={`Frame ${frame.frameIndex} annotated`}
-                />
-                <FrameImageTile
-                  label="Pipeline Output"
-                  src={frame.pipelineOutput}
-                  alt={`Frame ${frame.frameIndex} pipeline output`}
-                />
-              </div>
-            </div>
-          ))
+          <FrameGallery frames={frames} jobId={job.id} />
         ) : (
           <div className={styles.emptyState}>No frame images returned yet.</div>
         )}

@@ -21,9 +21,12 @@ async function createDashboard({ failAt = Infinity, status = 'pending', submissi
   let reloads = 0;
   const payloads = [];
   const refreshedIds = [];
+  const persisted = [];
   const timers = new Map();
+  const effects = [];
   let nextTimer = 1;
   const context = createContext({
+    AbortController,
     console: { error() {} },
     setInterval(callback) {
       const id = nextTimer++;
@@ -45,9 +48,21 @@ async function createDashboard({ failAt = Infinity, status = 'pending', submissi
       if (!(index in slots)) slots[index] = { current: initial };
       return slots[index];
     },
-    useEffect() {},
+    useEffect(callback, deps) {
+      const index = cursor++;
+      const previous = slots[index];
+      if (!previous || !deps || deps.some((value, i) => value !== previous[i])) {
+        slots[index] = deps;
+        effects.push(callback);
+      }
+    },
     useMemo(callback) { return callback(); },
-    useCallback(callback) { return callback; },
+    useCallback(callback, deps) {
+      const index = cursor++;
+      const previous = slots[index];
+      if (!previous || deps.some((value, i) => value !== previous.deps[i])) slots[index] = { deps, callback };
+      return slots[index].callback;
+    },
   };
   const jsx = (type, props) => ({ type, props });
   const dependencies = {
@@ -67,6 +82,11 @@ async function createDashboard({ failAt = Infinity, status = 'pending', submissi
         refreshedIds.push(id);
         return { item: { id, status } };
       },
+    },
+    '../../services/jobMonitor.js': {
+      beginJobSubmission() {}, endJobSubmission() {},
+      recoverJobMonitor: async () => ({ jobs: [], warning: null, error: null }),
+      saveJobMonitor(ids, warning) { persisted.push({ ids: [...ids], warning }); },
     },
     '../../utils/formatters.js': {
       formatDateTime: String,
@@ -102,13 +122,16 @@ async function createDashboard({ failAt = Infinity, status = 'pending', submissi
       visit(node.props.children);
     }
     visit(tree);
+    effects.splice(0).forEach((effect) => effect());
     return elements;
   }
   return {
-    render, timers, payloads, refreshedIds,
+    render, timers, payloads, refreshedIds, persisted,
     setStatus(value) { status = value; },
     get reloads() { return reloads; },
     async submit() {
+      render();
+      await new Promise((resolve) => setImmediate(resolve));
       await render().find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
       await new Promise((resolve) => setImmediate(resolve));
     },
@@ -143,6 +166,10 @@ for (const [label, failAt, accepted] of [
       assert.equal(warnings()[0].props.message, 'Job submission error');
       assert.match(warnings()[0].props.detail, /Submission unavailable/);
       if (accepted) assert.match(warnings()[0].props.detail, /2 of 9 jobs started/);
+      if (accepted) {
+        assert.deepEqual(dashboard.persisted.at(-1).ids, ['job-1', 'job-2']);
+        assert.match(dashboard.persisted.at(-1).warning, /2 of 9/);
+      }
     }
     await dashboard.poll();
     assert.equal(dashboard.refreshedIds.length, accepted * 2);
