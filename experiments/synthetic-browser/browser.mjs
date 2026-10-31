@@ -162,7 +162,7 @@ try {
   stage='camera_job_state_presentation';
   await evaluate(`document.querySelector('a[href^="/camera/"]').click()`);
   stage='camera_complete_label';
-  await wait('document.body.innerText.includes("Job complete")',30000);
+  await wait('document.body.textContent.includes("Job complete")',30000);
   stage='camera_blocked_player_failure';
   await wait('document.body.innerText.includes("Raw playback error:")',30000);
   assert.equal(await evaluate('Boolean(document.querySelector("video"))'),true);
