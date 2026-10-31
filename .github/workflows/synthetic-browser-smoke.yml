@@ -2,7 +2,7 @@ name: Isolated synthetic browser restart smoke
 
 on:
   push:
-    branches: [michaelabatetsu-synthetic-browser-smoke]
+    branches: [michaelabatetsu-final-keyed-browser-smoke]
     paths:
       - .github/workflows/synthetic-browser-smoke.yml
       - experiments/synthetic-browser/**
@@ -21,13 +21,13 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: MichaelAbateTSU/Traffic-Accident-Detection
-          ref: 21cb418e673fc944bbe2ca41bddf6d11b04c4b63
+          ref: 5a1bfc38e207913c66eb6120e986147a66410424
           fetch-depth: 0
           persist-credentials: false
           path: backend
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: f93f98f009799d7e72c42397a64042427a738682
+          ref: f8461ada80f7ee10d9b5169364c10e9aa9fddef7
           persist-credentials: false
           path: frontend
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -35,8 +35,8 @@ jobs:
           node-version: 22
       - name: Build exact applications before any live admission
         run: |
-          test "$(git -C backend rev-parse HEAD)" = 21cb418e673fc944bbe2ca41bddf6d11b04c4b63
-          test "$(git -C frontend rev-parse HEAD)" = f93f98f009799d7e72c42397a64042427a738682
+          test "$(git -C backend rev-parse HEAD)" = 5a1bfc38e207913c66eb6120e986147a66410424
+          test "$(git -C frontend rev-parse HEAD)" = f8461ada80f7ee10d9b5169364c10e9aa9fddef7
           cd frontend
           npm ci --quiet
           npm test

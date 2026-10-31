@@ -12,8 +12,8 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parent
 SOURCE = "https://media.githubusercontent.com/media/accidentbench/accidentbench.github.io/main/assets/videos/synthetic/Town03_head-on_clear_30.mp4"
-BACKEND = "21cb418e673fc944bbe2ca41bddf6d11b04c4b63"
-FRONTEND = "f93f98f009799d7e72c42397a64042427a738682"
+BACKEND = "5a1bfc38e207913c66eb6120e986147a66410424"
+FRONTEND = "f8461ada80f7ee10d9b5169364c10e9aa9fddef7"
 CADDY = "caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
 environment = os.environ.copy()
 environment["API_TOKEN"] = secrets.token_urlsafe(48)
@@ -91,6 +91,7 @@ https://frontend.integration.test:8454 {
                "-v", "synthetic-browser-data:/data",
                "--tmpfs", "/tmp:size=256m,mode=1777",
                "--mount", f"type=bind,source={ROOT / 'serve.py'},target=/app/browser_serve.py,readonly",
+               "--mount", f"type=bind,source={ROOT / 'admission_failure_fault.py'},target=/app/admission_failure_fault.py,readonly",
                "-e", "API_TOKEN", "-e", "ENVIRONMENT=production",
                "-e", "CORS_ORIGINS=https://frontend.integration.test:8454",
                "-e", "APPROVED_STREAM_URLS=" + json.dumps([SOURCE]),
@@ -204,7 +205,7 @@ print(json.dumps({'source_sha256':digest.hexdigest(),'source_bytes':count,'direc
             }), flush=True)
             raise RuntimeError("Chrome debugging endpoint unavailable")
         result = command(
-            shutil.which("node"), str(ROOT / "browser.mjs"), capture=True, check=False, timeout=240,
+            shutil.which("node"), str(ROOT / "keyed_browser.mjs"), capture=True, check=False, timeout=240,
         )
         safe = json.loads(result.stdout)
         print(json.dumps(safe | {
@@ -248,10 +249,28 @@ print(json.dumps({'temporary_artifact_files':artifact_files,**counts}))
             time.sleep(1)
         else:
             raise RuntimeError("Restart health failed")
-        recovery = command(shutil.which("node"), str(ROOT / "browser.mjs"), "recovery",
+        recovery = command(shutil.which("node"), str(ROOT / "keyed_browser.mjs"), "recovery",
                            capture=True, check=False, timeout=120)
         print(json.dumps(json.loads(recovery.stdout)), flush=True)
         assert recovery.returncode==0
+        stage = "admission_failure_restart"
+        docker("exec", "r2-browser-api", "python", "-c",
+               "from pathlib import Path; Path('/data/admission-fault-enable').touch()")
+        docker("restart", "r2-browser-api")
+        for attempt in range(60):
+            readiness = command("curl", "--noproxy", "*", "--fail", "--silent",
+                                "--cacert", str(temp / "server.crt"),
+                                "--resolve", "api.integration.test:8453:127.0.0.1",
+                                "https://api.integration.test:8453/health", capture=True, check=False)
+            if readiness.returncode == 0 and json.loads(readiness.stdout)["model_loaded"]:
+                break
+            time.sleep(1)
+        else:
+            raise RuntimeError("Admission fault restart health failed")
+        admission = command(shutil.which("node"), str(ROOT / "keyed_browser.mjs"), "admission",
+                            capture=True, check=False, timeout=150)
+        print(json.dumps(json.loads(admission.stdout)), flush=True)
+        assert admission.returncode == 0
 except Exception as error:
     evidence = {"status": "bounded_experiment_blocked", "stage": stage, "error_type": type(error).__name__}
     if isinstance(error, subprocess.CalledProcessError):

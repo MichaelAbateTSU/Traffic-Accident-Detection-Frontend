@@ -39,7 +39,7 @@ def measured_job(*args, **kwargs):
 
 main.run_detection_job = measured_job
 cleanup_admission_fault = None
-if os.environ.get("SYNTHETIC_ADMISSION_FAULT") == "1":
+if os.environ.get("SYNTHETIC_ADMISSION_FAULT") == "1" or Path("/data/admission-fault-enable").exists():
     from admission_failure_fault import install_admission_failure_fault
     cleanup_admission_fault = install_admission_failure_fault(
         main.job_store, main.DetectionQueue, "/data/jobs.sqlite3",
