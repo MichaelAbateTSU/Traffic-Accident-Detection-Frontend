@@ -56,7 +56,7 @@ test('both JobStatusCard and Dashboard route 300-frame lists through bounded gal
     'react-router-dom': { Link: 'Link' },
     '../../constants/cameras.js': { FIXED_CAMERA_STREAM_URLS: [] },
     '../../services/api.js': { parseMaxFrames: Number, getJob() {}, startDetectionJob() {} },
-    '../../services/jobMonitor.js': { beginJobSubmission() {}, endJobSubmission() {}, recoverJobMonitor: async () => ({ jobs: [job] }), saveJobMonitor() {} },
+    '../../services/jobMonitor.js': { beginJobSubmission() {}, endJobSubmission() {}, getMonitoredJob() {}, recoverJobMonitor: async () => ({ jobs: [job] }), saveJobMonitor() {} },
     '../../utils/formatters.js': { formatDateTime: String, formatNumber: String, formatPercent: String },
     '../../hooks/useDashboardData.js': { useDashboardData: () => ({ incidents: [], cameras: [], jobs: [], reload() {} }) },
   });
