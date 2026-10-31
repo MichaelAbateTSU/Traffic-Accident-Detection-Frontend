@@ -82,7 +82,7 @@ for (const [ratio, incidents] of [[100, []], [75, records]]) {
       '../../constants/cameras.js': { FIXED_CAMERA_STREAM_URLS },
       '../../services/api.js': { parseMaxFrames() {}, getJob() {}, startDetectionJob() {} },
       '../../services/jobMonitor.js': {
-        beginJobSubmission() {}, endJobSubmission() {}, saveJobMonitor() {},
+        getMonitoredJob() {}, beginJobSubmission() {}, endJobSubmission() {}, saveJobMonitor() {},
         recoverJobMonitor: async () => ({ jobs: [], warning: null, error: null }),
       },
       '../../hooks/useDashboardData.js': {

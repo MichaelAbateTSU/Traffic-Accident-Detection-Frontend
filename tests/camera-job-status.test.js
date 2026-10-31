@@ -292,7 +292,7 @@ test('dashboard zero retained sources is never all-online and counts remain job-
     'react-router-dom': { Link: 'Link' },
     '../../constants/cameras.js': cameras,
     '../../services/api.js': { getJob() {}, parseMaxFrames() {}, startDetectionJob() {} },
-    '../../services/jobMonitor.js': { beginJobSubmission() {}, endJobSubmission() {}, saveJobMonitor() {}, recoverJobMonitor: async () => ({ jobs: [] }) },
+    '../../services/jobMonitor.js': { getMonitoredJob() {}, beginJobSubmission() {}, endJobSubmission() {}, saveJobMonitor() {}, recoverJobMonitor: async () => ({ jobs: [] }) },
     '../../hooks/useDashboardData.js': { useDashboardData: () => ({ stats: { activeCameras: 0, totalCameras: 0 }, cameras: [], incidents: [], jobs: [], reload() {} }) },
   }, { URL });
   harness.render();
@@ -311,7 +311,7 @@ test('dashboard counts a source with an older pending job even when its latest j
     'react-router-dom': { Link: 'Link' },
     '../../constants/cameras.js': cameras,
     '../../services/api.js': { getJob() {}, parseMaxFrames() {}, startDetectionJob() {} },
-    '../../services/jobMonitor.js': { beginJobSubmission() {}, endJobSubmission() {}, saveJobMonitor() {}, recoverJobMonitor: async () => ({ jobs: [] }) },
+    '../../services/jobMonitor.js': { getMonitoredJob() {}, beginJobSubmission() {}, endJobSubmission() {}, saveJobMonitor() {}, recoverJobMonitor: async () => ({ jobs: [] }) },
     '../../hooks/useDashboardData.js': { useDashboardData: () => ({
       stats: { activeCameras: 1, totalCameras: 1 },
       cameras: [{ id: 'source', streamUrl: source, status: 'offline' }],
