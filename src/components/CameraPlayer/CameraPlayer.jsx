@@ -26,6 +26,8 @@ export default function CameraPlayer({
 
     let hls;
     let cancelled = false;
+    onFatalError?.('');
+    onLoadingChange?.(false);
 
     const setLoading = (value) => {
       if (!cancelled) onLoadingChange?.(value);

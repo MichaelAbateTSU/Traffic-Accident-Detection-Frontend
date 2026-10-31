@@ -39,14 +39,6 @@ export default function CameraCard({ camera }) {
   const lastSeen = camera.lastSeenAt ?? camera.last_seen_at ?? null;
   const shouldLoadVideo = Boolean(streamHref) && (isVisible || isHovered);
 
-  useEffect(() => {
-    if (shouldLoadVideo) {
-      setPlayerError(null);
-    } else {
-      setPlayerLoading(false);
-    }
-  }, [shouldLoadVideo, streamHref]);
-
   const openCameraView = () => {
     navigate(`/camera/${encodeURIComponent(camera.id)}`, {
       state: {
@@ -91,7 +83,7 @@ export default function CameraCard({ camera }) {
             videoClassName={styles.frame}
           />
         )}
-        {playerLoading && (
+        {shouldLoadVideo && playerLoading && (
           <div className={styles.placeholder}>
             <span className={styles.loadingText}>Loading live preview...</span>
           </div>
@@ -101,7 +93,7 @@ export default function CameraCard({ camera }) {
             <span className={styles.loadingText}>{streamHref ? 'Raw preview paused' : 'No raw stream configured'}</span>
           </div>
         )}
-        {playerError && (
+        {shouldLoadVideo && playerError && (
           <div className={styles.placeholder}>
             <span className={styles.errorText} role="alert">Raw playback error: {playerError}</span>
           </div>
@@ -119,7 +111,7 @@ export default function CameraCard({ camera }) {
           {lastSeen && <span className={styles.cameraName}>Job timestamp: {formatDateTime(lastSeen)}</span>}
         </div>
         <div className={styles.meta}>
-          <StatusBadge status={camera.status ?? 'unknown'} label={cameraJobStatusLabel(camera.status)} />
+          <StatusBadge status={camera.status ?? 'unknown'} label={cameraJobStatusLabel(camera.status)} neutral={!['online', 'warning'].includes(camera.status)} />
           {camera.fps != null && (
             <span className={styles.fps}>Job FPS: {camera.fps}</span>
           )}

@@ -15,7 +15,7 @@ export default function CameraPreviewCard({ camera }) {
     <Link to={targetPath} className={styles.card}>
       <div className={styles.preview}>
         <span className={styles.previewLabel}>Open raw stream</span>
-        <StatusBadge status={status} label={cameraJobStatusLabel(status)} />
+        <StatusBadge status={status} label={cameraJobStatusLabel(status)} neutral={!['online', 'warning'].includes(status)} />
       </div>
       <div className={styles.meta}>
         <span className={styles.id}>{cameraId}</span>

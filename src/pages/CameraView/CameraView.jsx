@@ -116,11 +116,6 @@ export default function CameraView() {
   const hasStream = Boolean(camera.streamUrl);
   const canPlay = hasStream;
 
-  useEffect(() => {
-    setPlayerError(null);
-    setPlayerLoading(false);
-  }, [camera.streamUrl]);
-
   const handleBack = () => {
     if (window.history.length > 1) {
       navigate(-1);
@@ -180,15 +175,15 @@ export default function CameraView() {
           </button>
           <div className={styles.titleGroup}>
             <h1>{camera.name ?? camera.id}</h1>
-            <StatusBadge status={camera.status} label={cameraJobStatusLabel(camera.status)} />
+            <StatusBadge status={camera.status} label={cameraJobStatusLabel(camera.status)} neutral={!['online', 'warning'].includes(camera.status)} />
           </div>
           <div className={styles.meta}>
             {camera.fps != null && <span>Job FPS: {camera.fps}</span>}
             <span>Raw live playback, not YOLO-processed; job state is not source health.</span>
             {camera.lastSeenAt && <span>Job timestamp: {formatDateTime(camera.lastSeenAt)}</span>}
             {loading && <span>Refreshing job status...</span>}
-            {playerLoading && <span>Initializing stream...</span>}
-            {playerError && <span className={styles.error} role="alert">Raw playback error: {playerError}</span>}
+            {canPlay && playerLoading && <span>Initializing stream...</span>}
+            {canPlay && playerError && <span className={styles.error} role="alert">Raw playback error: {playerError}</span>}
             {error && <span className={styles.error} role="alert">Job status refresh failed: {error}</span>}
           </div>
         </div>

@@ -249,7 +249,7 @@ test('native player errors and autoplay rejection are surfaced with manual video
   harness.render(props);
   await harness.flush();
   assert.equal(harness.elements.find(n => n.type === 'video').props.controls, true);
-  assert.match(errors[0], /Autoplay blocked.*controls/);
+  assert.match(errors.at(-1), /Autoplay blocked.*controls/);
   handlers.get('playing')();
   assert.equal(errors.at(-1), '');
   handlers.get('error')();
@@ -279,7 +279,7 @@ test('HLS transport failure propagates from the real player event path', async (
   harness.render(props);
   assert.equal(loadedSource, camera.streamUrl);
   callbacks.get('error')(null, { fatal: true, details: 'manifestLoadError' });
-  assert.equal(errors[0], 'manifestLoadError');
+  assert.equal(errors.at(-1), 'manifestLoadError');
   harness.unmount();
   assert.equal(destroyed, true);
 });

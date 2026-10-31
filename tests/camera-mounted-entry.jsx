@@ -1,0 +1,106 @@
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { MemoryRouter, useNavigate } from 'react-router-dom';
+import CameraCard from '../src/components/CameraCard/CameraCard.jsx';
+import CameraView from '../src/pages/CameraView/CameraView.jsx';
+import CameraPlayer from '../src/components/CameraPlayer/CameraPlayer.jsx';
+import CameraPreviewCard from '../src/components/CameraPreviewCard/CameraPreviewCard.jsx';
+import StatusBadge from '../src/components/StatusBadge/StatusBadge.jsx';
+
+const pause = () => new Promise(resolve => setTimeout(resolve, 30));
+const check = (value, message) => { if (!value) throw new Error(message); };
+HTMLMediaElement.prototype.canPlayType = () => '';
+HTMLMediaElement.prototype.pause = () => {};
+HTMLMediaElement.prototype.load = () => {};
+HTMLMediaElement.prototype.play = () => Promise.resolve();
+window.hlsSupported = false;
+window.observers = [];
+window.IntersectionObserver = class {
+  constructor(callback) { this.callback = callback; window.observers.push(this); }
+  observe() { this.callback([{ isIntersecting: true }]); }
+  disconnect() {}
+};
+const container = document.getElementById('root');
+let root;
+const render = async node => {
+  if (!root) root = createRoot(container);
+  root.render(node);
+  await pause();
+  await pause();
+};
+const unmount = () => { root.unmount(); root = null; };
+const card = source => <MemoryRouter><CameraCard camera={{ id: 'camera', streamUrl: source, status: 'offline' }} /></MemoryRouter>;
+function RoutedView({ source }) {
+  const navigate = useNavigate();
+  React.useEffect(() => {
+    navigate('/camera/camera', { state: { id: 'camera', streamUrl: source } });
+  }, [navigate, source]);
+  return <CameraView />;
+}
+const view = source => <MemoryRouter initialEntries={[{ pathname: '/camera/camera', state: { id: 'camera', streamUrl: source } }]}><RoutedView source={source} /></MemoryRouter>;
+try {
+  await render(view('https://fixture.invalid/one.m3u8'));
+  check(container.textContent.includes('HLS is not supported in this browser.'), 'mounted CameraView erased synchronous unsupported error');
+  check(!container.textContent.includes('Initializing stream'), 'unsupported view remained loading');
+  const viewBadge = [...container.querySelectorAll('span')].find(n => n.textContent === 'Job state unknown');
+  check(viewBadge && /idle/.test(viewBadge.className), 'unknown full-view badge not neutral');
+  unmount();
+  await render(card('https://fixture.invalid/one.m3u8'));
+  check(container.textContent.includes('HLS is not supported in this browser.'), 'mounted CameraCard erased synchronous unsupported error');
+  await render(card('https://fixture.invalid/two.m3u8'));
+  check(container.textContent.includes('HLS is not supported in this browser.'), 'source change erased unsupported error');
+  window.observers.at(-1).callback([{ isIntersecting: false }]);
+  await pause();
+  check(!container.querySelector('[role="alert"]'), 'deactivated card retained old playback error');
+  window.hlsSupported = true;
+  window.observers.at(-1).callback([{ isIntersecting: true }]);
+  await pause();
+  check(container.textContent.includes('Loading live preview'), 'reactivated card erased loading');
+  check(!container.querySelector('[role="alert"]'), 'reactivated card retained stale error');
+  unmount();
+  window.cameraStatus = { id: 'camera', status: 'offline' };
+  await render(view('https://fixture.invalid/three.m3u8'));
+  check(container.textContent.includes('Initializing stream'), 'mounted CameraView erased initial loading');
+  const completedViewBadge = [...container.querySelectorAll('span')].find(n => n.textContent === 'Job complete');
+  check(completedViewBadge && /idle/.test(completedViewBadge.className), 'completed full-view badge not neutral');
+  const player = window.players.at(-1);
+  player.error('fixture decode failure');
+  await pause();
+  check(container.textContent.includes('fixture decode failure'), 'async player failure missing');
+  await render(view('https://fixture.invalid/four.m3u8'));
+  check(container.textContent.includes('Initializing stream'), 'full-view source change erased loading');
+  check(!container.textContent.includes('fixture decode failure'), 'full-view source change retained old error');
+  unmount();
+  check(player.destroyed, 'player not destroyed on parent unmount');
+  const changes = [];
+  const onError = value => changes.push(value);
+  await render(<CameraPlayer src="https://fixture.invalid/a.m3u8" onFatalError={onError} />);
+  const prior = window.players.at(-1);
+  prior.error('old error');
+  await render(<CameraPlayer src="https://fixture.invalid/b.m3u8" onFatalError={onError} />);
+  check(changes.at(-1) === '', 'new source did not reset error');
+  prior.error('late old error');
+  check(changes.at(-1) === '', 'destroyed source delivered stale error');
+  await render(<CameraPlayer src="https://fixture.invalid/b.m3u8" active={false} onFatalError={onError} />);
+  check(window.players.at(-1).destroyed, 'deactivation did not destroy player');
+  check(changes.at(-1) === '', 'deactivation retained playback error');
+  unmount();
+  await render(<MemoryRouter><CameraPreviewCard camera={{ id: 'no-stream', status }} /></MemoryRouter>);
+  const previewBadge = [...container.querySelectorAll('span')].find(n => n.textContent === (status === 'offline' ? 'Job complete' : 'Job state unknown'));
+  check(previewBadge && /idle/.test(previewBadge.className), 'dashboard camera badge not neutral');
+  unmount();
+  for (const status of ['unknown', 'offline']) {
+    await render(<MemoryRouter><CameraCard camera={{ id: 'no-stream', status }} /></MemoryRouter>);
+    const badge = [...container.querySelectorAll('span')].find(n => n.textContent === (status === 'offline' ? 'Job complete' : 'Job state unknown'));
+    check(badge && /idle|neutral/.test(badge.className) && !/offline/.test(badge.className), `${status} camera badge not neutral`);
+    unmount();
+  }
+  await render(<StatusBadge status="offline" />);
+  check(/offline/.test(container.firstElementChild.className), 'shared offline meaning changed');
+  unmount();
+  document.body.dataset.result = 'passed';
+} catch (error) {
+  document.body.dataset.result = 'failed';
+  document.body.dataset.failure = error.message;
+  root?.unmount();
+}
