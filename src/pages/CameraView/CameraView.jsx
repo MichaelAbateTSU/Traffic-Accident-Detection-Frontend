@@ -25,6 +25,7 @@ export default function CameraView() {
     () => (cameraId ? getStreamUrlForCameraId(cameraId) : null),
     [cameraId],
   );
+  const configuredStreamUrl = state.streamUrl ?? fallbackStreamUrl;
 
   const [camera, setCamera] = useState({
     id: cameraId,
@@ -77,7 +78,7 @@ export default function CameraView() {
           ...prev,
           id: statusItem.id,
           name: statusItem.name ?? prev.name,
-          streamUrl: statusItem.streamUrl ?? prev.streamUrl ?? fallbackStreamUrl,
+          streamUrl: configuredStreamUrl ?? statusItem.streamUrl ?? prev.streamUrl,
           status: statusItem.status ?? 'unknown',
           fps: statusItem.fps ?? null,
           lastSeenAt: statusItem.lastSeenAt ?? null,
@@ -97,7 +98,7 @@ export default function CameraView() {
       loader.stop();
       clearInterval(interval);
     };
-  }, [cameraId, fallbackStreamUrl]);
+  }, [cameraId, configuredStreamUrl]);
 
   useEffect(() => {
     setCamera((previous) => {

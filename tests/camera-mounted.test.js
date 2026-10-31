@@ -34,7 +34,7 @@ test('real mounted camera parents preserve child effect errors/loading and neutr
           static isSupported(){return window.hlsSupported}
           constructor(){this.handlers={};(window.players ||= []).push(this)}
           on(event,callback){this.handlers[event]=callback}
-          loadSource(){} attachMedia(){}
+          loadSource(src){this.source=src} attachMedia(){}
           error(details){this.handlers.error(null,{fatal:true,details})}
           destroy(){this.destroyed=true}
         }`;

@@ -16,6 +16,15 @@ HTMLMediaElement.prototype.load = () => {};
 HTMLMediaElement.prototype.play = () => Promise.resolve();
 window.hlsSupported = false;
 window.observers = [];
+window.refreshCallbacks = new Map();
+const originalInterval = window.setInterval.bind(window);
+const originalClearInterval = window.clearInterval.bind(window);
+window.setInterval = (callback, delay) => {
+  const id = originalInterval(callback, delay);
+  window.refreshCallbacks.set(id, callback);
+  return id;
+};
+window.clearInterval = id => { window.refreshCallbacks.delete(id); originalClearInterval(id); };
 window.IntersectionObserver = class {
   constructor(callback) { this.callback = callback; window.observers.push(this); }
   observe() { this.callback([{ isIntersecting: true }]); }
@@ -59,11 +68,15 @@ try {
   check(container.textContent.includes('Loading live preview'), 'reactivated card erased loading');
   check(!container.querySelector('[role="alert"]'), 'reactivated card retained stale error');
   unmount();
-  window.cameraStatus = { id: 'camera', status: 'offline' };
+  window.cameraStatus = { id: 'camera', status: 'offline', streamUrl: 'https://fixture.invalid/recording.mp4' };
   await render(view('https://fixture.invalid/three.m3u8'));
   check(container.textContent.includes('Initializing stream'), 'mounted CameraView erased initial loading');
   const completedViewBadge = [...container.querySelectorAll('span')].find(n => n.textContent === 'Job complete');
   check(completedViewBadge && /idle/.test(completedViewBadge.className), 'completed full-view badge not neutral');
+  check(window.players.at(-1).source === 'https://fixture.invalid/three.m3u8', 'job recording replaced configured raw stream');
+  for (const callback of window.refreshCallbacks.values()) callback();
+  await pause();
+  check(window.players.at(-1).source === 'https://fixture.invalid/three.m3u8', 'later status refresh replaced configured stream');
   const player = window.players.at(-1);
   player.error('fixture decode failure');
   await pause();
@@ -71,8 +84,15 @@ try {
   await render(view('https://fixture.invalid/four.m3u8'));
   check(container.textContent.includes('Initializing stream'), 'full-view source change erased loading');
   check(!container.textContent.includes('fixture decode failure'), 'full-view source change retained old error');
+  check(window.players.at(-1).source === 'https://fixture.invalid/four.m3u8', 'legitimate route replacement did not update raw stream');
+  for (const callback of window.refreshCallbacks.values()) callback();
+  await pause();
+  check(window.players.at(-1).source === 'https://fixture.invalid/four.m3u8', 'status refresh overwrote replacement route stream');
   unmount();
   check(player.destroyed, 'player not destroyed on parent unmount');
+  await render(view(undefined));
+  check(window.players.at(-1).source === 'https://fixture.invalid/recording.mp4', 'unconfigured source could not discover job URL');
+  unmount();
   const changes = [];
   const onError = value => changes.push(value);
   await render(<CameraPlayer src="https://fixture.invalid/a.m3u8" onFatalError={onError} />);
