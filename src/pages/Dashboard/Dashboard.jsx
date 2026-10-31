@@ -134,7 +134,7 @@ export default function Dashboard() {
     loading,
     error,
     reload,
-  } = useDashboardData({ incidentsPageSize: 5, incidentsStatus: 'active' });
+  } = useDashboardData({ incidentsPageSize: 5, incidentsStatus: 'all' });
   useEffect(() => {
     monitoredJobsRef.current = monitoredJobs;
   }, [monitoredJobs]);
@@ -506,7 +506,7 @@ export default function Dashboard() {
 
       <SectionCard
         title="Recent Alarm Frames"
-        description={`Showing latest ${incidents.length} of ${totalRecentIncidents} records with active status. Status is job-derived by default or manually overridden; it does not confirm review, accident resolution or a live alarm.`}
+        description={`Showing latest ${incidents.length} of ${totalRecentIncidents} retained alarm-frame records across all statuses. Status is job-derived by default or manually overridden; it does not confirm review, accident resolution or a live alarm.`}
         action={<Link to="/incidents" className={styles.viewAll}>View all</Link>}
       >
         <IncidentTable
@@ -514,7 +514,7 @@ export default function Dashboard() {
           compact
           onRowClick={setSelectedIncident}
           selectedIncidentId={selectedIncident?.id ?? null}
-          emptyMessage="No alarm-frame records with active status in this dashboard window."
+          emptyMessage="No retained alarm-frame records in this dashboard window."
         />
         {selectedIncident && (
           <div className={styles.incidentDetailWrap}>
