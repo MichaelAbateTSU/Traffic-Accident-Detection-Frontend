@@ -126,7 +126,7 @@ test('Dashboard stale update refreshes the list without replacing a new selectio
     '../../constants/cameras.js': { FIXED_CAMERA_STREAM_URLS },
     '../../utils/formatters.js': formatters,
     '../../services/api.js': { getJob() {}, startDetectionJob() {}, parseMaxFrames() {} },
-    '../../services/jobMonitor.js': { beginJobSubmission() {}, endJobSubmission() {}, recoverJobMonitor: async () => ({ jobs: [] }), saveJobMonitor() {} },
+    '../../services/jobMonitor.js': { beginJobSubmission() {}, endJobSubmission() {}, getMonitoredJob() {}, recoverJobMonitor: async () => ({ jobs: [] }), saveJobMonitor() {} },
     '../../hooks/useDashboardData.js': {
       useDashboardData: () => ({
         stats: null, incidents: [incidentA, incidentB], cameras: [], jobs: [],

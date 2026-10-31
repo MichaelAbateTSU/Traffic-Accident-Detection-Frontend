@@ -79,13 +79,13 @@ async function createDashboard({ failAt = Infinity, status = 'pending', submissi
         if (submissions++ === failAt) throw new Error('Submission unavailable');
         return { item: { id: `job-${submissions}`, status, peakConfidence: 0.87 } };
       },
-      async getJob(id) {
-        refreshedIds.push(id);
-        return { item: { id, status } };
-      },
     },
     '../../services/jobMonitor.js': {
       beginJobSubmission() {}, endJobSubmission() {},
+      async getMonitoredJob(id) {
+        refreshedIds.push(id);
+        return { item: { id, status } };
+      },
       recoverJobMonitor: async () => ({ jobs: [], warning: null, error: null }),
       saveJobMonitor(ids, warning) { persisted.push({ ids: [...ids], warning }); },
     },
@@ -153,7 +153,8 @@ for (const [label, failAt, accepted] of [
     await dashboard.submit();
     const jobs = dashboard.render().filter((node) => node.type === 'JobStatusCard');
     assert.equal(jobs.length, accepted);
-    assert.equal(dashboard.refreshedIds.length, accepted);
+    await dashboard.poll();
+    assert.equal(new Set(dashboard.refreshedIds).size, accepted);
     assert.equal(dashboard.timers.size, accepted ? 1 : 0);
     assert.equal(dashboard.reloads, accepted ? 1 : 0);
     assert.ok(dashboard.payloads.every((payload) => payload.save_frames === false));
@@ -172,8 +173,9 @@ for (const [label, failAt, accepted] of [
         assert.match(dashboard.persisted.at(-1).warning, /2 of 9/);
       }
     }
+    const previousReads = dashboard.refreshedIds.length;
     await dashboard.poll();
-    assert.equal(dashboard.refreshedIds.length, accepted * 2);
+    assert.equal(dashboard.refreshedIds.length, previousReads + accepted);
     assert.equal(warnings().length, failAt === Infinity ? 0 : 1);
 
     const previousPayloads = dashboard.payloads.length;

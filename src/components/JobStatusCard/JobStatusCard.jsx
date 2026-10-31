@@ -8,6 +8,7 @@ function getBadgeStatus(status) {
   if (normalized === 'complete') return 'resolved';
   if (normalized === 'running') return 'active';
   if (normalized === 'pending') return 'warning';
+  if (normalized === 'unavailable') return 'offline';
   if (normalized) return 'critical';
   return 'offline';
 }
@@ -17,6 +18,7 @@ function getDisplayStatus(status) {
   if (normalized === 'complete') return 'done';
   if (normalized === 'running') return 'in-progress';
   if (normalized === 'pending') return 'pending';
+  if (normalized === 'unavailable') return 'unavailable (outcome unknown)';
   return status ?? '—';
 }
 
@@ -111,6 +113,7 @@ export default function JobStatusCard({ job }) {
       </section>
       {job.message && <div className={styles.message}>{job.message}</div>}
       {job.error && <div className={styles.error}>{String(job.error)}</div>}
+      {job.monitorError && <div className={styles.error} role="alert">{job.monitorError}</div>}
     </article>
   );
 }
