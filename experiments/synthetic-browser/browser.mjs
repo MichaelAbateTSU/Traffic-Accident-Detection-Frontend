@@ -10,6 +10,7 @@ let stage = 'devtools';
 let posts = 0, imageGets = 0, errors = 0;
 let ws;
 let blockedExternalRequests = 0;
+let cancelledInterceptions = 0, interceptionErrors = 0;
 try {
   const targets = await (await fetch('http://127.0.0.1:9225/json/list')).json();
   ws = new WebSocket(targets.find(t => t.type === 'page').webSocketDebuggerUrl);
@@ -23,7 +24,7 @@ try {
     if(message.id) {
       const waiter=pending.get(message.id);
       pending.delete(message.id);
-      message.error ? waiter.reject(new Error('CDP failure')) : waiter.resolve(message.result);
+      message.error ? waiter.reject(new Error(message.error.message)) : waiter.resolve(message.result);
     } else if(message.method==='Fetch.requestPaused') {
       const url=message.params.request.url;
       const permitted=url.startsWith(api+'/') || url.startsWith(frontend+'/');
@@ -31,7 +32,10 @@ try {
       send(permitted?'Fetch.continueRequest':'Fetch.failRequest', {
         requestId:message.params.requestId,
         ...(permitted?{}:{errorReason:'BlockedByClient'}),
-      }).catch(()=>{ errors++; });
+      }).catch(error=>{
+        if(error.message.includes('Invalid InterceptionId')) cancelledInterceptions++;
+        else interceptionErrors++;
+      });
     } else if(message.method==='Runtime.exceptionThrown') {
       errors++;
     } else if(message.method==='Network.requestWillBeSent') {
@@ -178,6 +182,7 @@ try {
   assert.equal(await evaluate('document.body.innerText.includes("Raw camera playback, not YOLO-processed.")'),true);
   assert.equal(await evaluate(`JSON.stringify({local:{...localStorage},session:{...sessionStorage}}).includes(${JSON.stringify(token)})`),false);
   assert.equal(errors,0);
+  assert.equal(interceptionErrors,0);
   if(phase==='recovery') {
     await click('Sign out');
     await wait('Boolean(document.querySelector("#operator-token"))',30000);
@@ -191,9 +196,10 @@ try {
     result_identical_after_restart:phase==='recovery',ui_terminal_rendered:true,
     camera_complete_job_player_attempted:true,raw_external_requests_blocked:blockedExternalRequests,
     real_camera_hosts_contacted:0,unknown_configured_sources:9,
+    cancelled_interceptions:cancelledInterceptions,interception_errors:interceptionErrors,
   }));
 } catch(error) {
-  console.log(JSON.stringify({phase,status:'browser_check_failed',stage,error_type:error.name,authenticated_posts:posts,js_exceptions:errors,raw_external_requests_blocked:blockedExternalRequests}));
+  console.log(JSON.stringify({phase,status:'browser_check_failed',stage,error_type:error.name,authenticated_posts:posts,js_exceptions:errors,raw_external_requests_blocked:blockedExternalRequests,cancelled_interceptions:cancelledInterceptions,interception_errors:interceptionErrors}));
   process.exitCode=1;
 } finally {
   ws?.close();
