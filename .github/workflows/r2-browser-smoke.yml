@@ -1,0 +1,58 @@
+name: Isolated R2_061 browser smoke (no media retention)
+
+on:
+  push:
+    branches: [michaelabatetsu-r2-browser-smoke]
+    paths:
+      - .github/workflows/r2-browser-smoke.yml
+      - experiments/r2-browser/**
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: MichaelAbateTSU/Traffic-Accident-Detection
+          ref: 4b6c5860510d2b52283d2e58e56e20286eb8a7f8
+          fetch-depth: 0
+          persist-credentials: false
+          path: backend
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 4c3e2257d7d27265322fdd2319ec79c906b54584
+          persist-credentials: false
+          path: frontend
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+      - name: Build exact applications before any live admission
+        run: |
+          test "$(git -C backend rev-parse HEAD)" = 4b6c5860510d2b52283d2e58e56e20286eb8a7f8
+          test "$(git -C frontend rev-parse HEAD)" = 4c3e2257d7d27265322fdd2319ec79c906b54584
+          git -C backend show f178f950a63a322c772cfc31558117b4c0359653:deploy/live_camera_smoke.py > experiments/r2-browser/prior_guard.py
+          cd frontend
+          npm ci --quiet
+          npm test
+          VITE_API_BASE_URL=https://api.integration.test:8453 npm run build:render
+          cd ..
+          docker build --quiet --platform linux/amd64 --build-arg TARGETARCH=amd64 -t traffic-live-smoke backend
+          docker build --quiet -f backend/deploy/Dockerfile.egress -t traffic-live-egress backend
+          docker pull --quiet caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+          command -v google-chrome
+      - name: Run actual production API and browser with no live media writes or logs
+        env:
+          EXPERIMENT_REVISION: ${{ github.sha }}
+        run: python experiments/r2-browser/orchestrate.py
+      - name: Remove temporary services on failure or cancellation
+        if: always()
+        run: |
+          docker rm -f -v r2-browser-https r2-browser-api r2-browser-egress >/dev/null 2>&1 || true
+          docker network rm r2-browser-private r2-browser-internet >/dev/null 2>&1 || true
