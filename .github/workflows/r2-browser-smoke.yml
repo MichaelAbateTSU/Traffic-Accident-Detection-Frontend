@@ -50,7 +50,9 @@ jobs:
       - name: Run actual production API and browser with no live media writes or logs
         env:
           EXPERIMENT_REVISION: ${{ github.sha }}
-        run: python experiments/r2-browser/orchestrate.py
+        run: |
+          sudo swapoff --all
+          python experiments/r2-browser/orchestrate.py
       - name: Remove temporary services on failure or cancellation
         if: always()
         run: |
