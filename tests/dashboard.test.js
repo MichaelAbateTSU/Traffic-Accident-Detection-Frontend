@@ -27,6 +27,7 @@ async function createDashboard({ failAt = Infinity, status = 'pending', submissi
   let nextTimer = 1;
   const context = createContext({
     AbortController,
+    URL,
     console: { error() {} },
     setInterval(callback) {
       const id = nextTimer++;
@@ -302,3 +303,49 @@ test('concurrent batch start is blocked even before the first job is accepted', 
   const button = dashboard.render().find((node) => node.type === 'button' && node.props.type === 'submit');
   assert.equal(button.props.disabled, true);
 });
+
+for (const sample of ['tbone', 'single']) {
+  test(`approved ${sample} example submits one bounded saved-frame job, not a camera batch`, async () => {
+    const dashboard = await createDashboard();
+    dashboard.render();
+    await new Promise((resolve) => setImmediate(resolve));
+    dashboard.render().find((node) => node.type === 'button' && node.props.children === `Select ${sample} (3) example`).props.onClick();
+    let elements = dashboard.render();
+    assert.equal(elements.find((node) => node.props.id === 'maxFrames').props.value, '200');
+    assert.equal(elements.find((node) => node.type === 'input' && node.props.type === 'checkbox').props.checked, true);
+    const url = `https://media.githubusercontent.com/media/accidentbench/accidentbench.github.io/main/assets/videos/real-world/${sample}%20(3).mp4`;
+    assert.equal(elements.find((node) => node.props.id === 'videoSource').props.value, url);
+    assert.equal(dashboard.payloads.length, 0);
+    await elements.filter((node) => node.type === 'form')[1].props.onSubmit({ preventDefault() {} });
+    elements = dashboard.render();
+    assert.equal(dashboard.payloads.length, 1);
+    assert.deepEqual({ ...dashboard.payloads[0] }, { stream_url: url, save_frames: true, max_frames: 200 });
+    assert.equal(elements.filter((node) => node.type === 'JobStatusCard').length, 1);
+    assert.equal(dashboard.timers.size, 1);
+    assert.match(JSON.stringify(elements), /CC BY-NC-SA 4.0/);
+    assert.match(JSON.stringify(elements), /exact source URL on the backend allowlist/);
+  });
+}
+
+test('backend allowlist rejection is surfaced for a single video without fallback camera submissions', async () => {
+  const dashboard = await createDashboard({ failAt: 0 });
+  dashboard.render();
+  await new Promise((resolve) => setImmediate(resolve));
+  dashboard.render().find((node) => node.props.id === 'videoSource').props.onChange({ target: { value: 'https://approved.example/video.mp4' } });
+  await dashboard.render().filter((node) => node.type === 'form')[1].props.onSubmit({ preventDefault() {} });
+  assert.equal(dashboard.payloads.length, 1);
+  assert.match(JSON.stringify(dashboard.render()), /Submission unavailable/);
+  assert.equal(dashboard.timers.size, 0);
+});
+
+for (const source of ['', 'http://example/video.mp4', 'https://user:pass@example/video.mp4', 'https://example/video.mp4#fragment']) {
+  test(`invalid single video source ${JSON.stringify(source)} makes no submission`, async () => {
+    const dashboard = await createDashboard();
+    dashboard.render();
+    await new Promise((resolve) => setImmediate(resolve));
+    dashboard.render().find((node) => node.props.id === 'videoSource').props.onChange({ target: { value: source } });
+    await dashboard.render().filter((node) => node.type === 'form')[1].props.onSubmit({ preventDefault() {} });
+    assert.equal(dashboard.payloads.length, 0);
+    assert.match(JSON.stringify(dashboard.render()), /Invalid video source/);
+  });
+}

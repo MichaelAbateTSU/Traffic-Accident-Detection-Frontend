@@ -100,6 +100,8 @@ function getDetectionStatusBadge(status) {
 export default function Dashboard() {
   const [saveFrames, setSaveFrames] = useState(false);
   const [maxFrames, setMaxFrames] = useState('120');
+  const [videoUrl, setVideoUrl] = useState('');
+  const [videoUrlError, setVideoUrlError] = useState(null);
   const [frameCountError, setFrameCountError] = useState(null);
   const [batchStartError, setBatchStartError] = useState(null);
   const [startingJob, setStartingJob] = useState(false);
@@ -260,7 +262,7 @@ export default function Dashboard() {
     };
   }, [stopBatchPolling]);
 
-  async function handleStartJob(event) {
+  async function handleStartJob(event, sources = FIXED_CAMERA_STREAM_URLS) {
     event.preventDefault();
     let frameCount;
     try {
@@ -291,7 +293,7 @@ export default function Dashboard() {
 
     const queuedResponses = [];
     try {
-      for (const streamUrl of FIXED_CAMERA_STREAM_URLS) {
+      for (const streamUrl of sources) {
         const { item } = await startDetectionJob({
           stream_url: streamUrl,
           save_frames: saveFrames,
@@ -318,7 +320,7 @@ export default function Dashboard() {
     } catch (err) {
       console.error(err);
       const warning = queuedResponses.length
-        ? `${queuedResponses.length} of ${totalFixedCameras} jobs started; submission stopped: ${err.message}`
+        ? `${queuedResponses.length} of ${sources.length} jobs started; submission stopped: ${err.message}`
         : err.message;
       setJobSubmissionError(warning);
       persistMonitor(queuedResponses.map((job) => job.id), warning);
@@ -332,12 +334,36 @@ export default function Dashboard() {
           }, JOB_POLL_INTERVAL_MS);
           refreshPendingJobs();
         }
+
         if (monitorMountedRef.current) reload();
       }
       setStartingJob(false);
       startingJobRef.current = false;
       endJobSubmission();
     }
+  }
+
+  async function handleVideoJob(event) {
+    event.preventDefault();
+    const source = videoUrl.trim();
+    try {
+      const url = new URL(source);
+      if (url.protocol !== 'https:' || url.username || url.password || url.hash) {
+        throw new Error('Use an HTTPS video URL without credentials or a fragment.');
+      }
+    } catch (error) {
+      setVideoUrlError(`Invalid video source: ${error.message}`);
+      return;
+    }
+    setVideoUrlError(null);
+    await handleStartJob(event, [source]);
+  }
+
+  function selectBenchmark(filename) {
+    setVideoUrl(`https://media.githubusercontent.com/media/accidentbench/accidentbench.github.io/main/assets/videos/real-world/${filename}%20(3).mp4`);
+    setMaxFrames('200');
+    setSaveFrames(true);
+    setVideoUrlError(null);
   }
 
   const activeIncidents = useMemo(() => incidents.filter((incident) => !incident.resolved), [incidents]);
@@ -507,7 +533,7 @@ export default function Dashboard() {
         title="Detection Job Monitor"
         description={`One detection job is queued for each of ${totalFixedCameras} fixed cameras, then each pending/running job is refreshed every second.`}
       >
-        <form className={styles.jobForm} onSubmit={handleStartJob}>
+        <form className={styles.jobForm} onSubmit={(event) => handleStartJob(event)}>
           <label className={styles.checkboxLabel} htmlFor="maxFrames">
             Frames per camera (1-300)
             <input
@@ -540,6 +566,30 @@ export default function Dashboard() {
             {startingJob ? `Queueing ${totalFixedCameras} detection jobs...` : `Run detection across ${totalFixedCameras} cameras`}
           </button>
         </form>
+        <section aria-label="Single video detection">
+          <h3>Run one approved HTTPS video</h3>
+          <p>Uses the Frames per camera limit above as the frame limit for this video, and the same Save frames setting.
+            The operator must explicitly approve the exact source URL on the backend allowlist before running it.
+            Backend rejection is shown as a job submission error; this app never bypasses approval.</p>
+          <form className={styles.jobForm} onSubmit={handleVideoJob}>
+            <label htmlFor="videoSource">Approved HTTPS video URL</label>
+            <input id="videoSource" type="url" required value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} />
+            <button type="submit" disabled={startingJob || activeJobsCount > 0 || recoveringMonitor || Boolean(monitorRecoveryError)}>
+              Run single video
+            </button>
+          </form>
+          {videoUrlError && <p role="alert">{videoUrlError}</p>}
+          <p>Optional examples from <a href="https://accidentbench.github.io/" target="_blank" rel="noreferrer">ACCIDENT benchmark</a>.
+            Reported license: CC BY-NC-SA 4.0, noncommercial use only. Media stays on the source host; no media is bundled.
+            Selecting an example sets 200 decoded frames and Save frames, but does not submit or approve it.</p>
+          <button type="button" onClick={() => selectBenchmark('tbone')}>Select tbone (3) example</button>
+          <a href="https://media.githubusercontent.com/media/accidentbench/accidentbench.github.io/main/assets/videos/real-world/tbone%20(3).mp4" target="_blank" rel="noreferrer">Original tbone (3) source</a>
+          <p>CSV onset: frame 18, 0.72 s. The website label differs from the CSV category; index conventions and detector accuracy are not verified.</p>
+          <button type="button" onClick={() => selectBenchmark('single')}>Select single (3) example</button>
+          <a href="https://media.githubusercontent.com/media/accidentbench/accidentbench.github.io/main/assets/videos/real-world/single%20(3).mp4" target="_blank" rel="noreferrer">Original single (3) source</a>
+          <p>CSV onset: frame 148, 6.644433 s. At least 149 decoded frames are needed; the example uses 200.
+            CSV source timing is distinct from the processing elapsed time displayed in results. Saved annotated frames and heuristic scores do not establish accuracy.</p>
+        </section>
         <p id="frame-count-hint" className={styles.monitorHint}>
           Each camera job processes up to the selected frame count (default 120), not continuous monitoring.
           Larger counts take longer; pending and running jobs continue to refresh until they finish.
