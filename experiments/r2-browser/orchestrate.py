@@ -41,7 +41,7 @@ def container_json(script):
 
 try:
     assert not command("swapon", "--noheadings", "--show", capture=True).stdout.strip(), "Swap must be disabled"
-    with tempfile.TemporaryDirectory(prefix="r2-browser-", dir="/dev/shm") as temporary:
+    with tempfile.TemporaryDirectory(prefix="r2-browser-", dir="/dev/shm", ignore_cleanup_errors=True) as temporary:
         temp = Path(temporary)
         stage = "temporary_https_setup"
         command("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
@@ -138,7 +138,7 @@ https://frontend.integration.test:8454 {
         print(json.dumps({"temporary_ca_https_health_verified": True}), flush=True)
         stage = "actual_browser"
         browser = subprocess.Popen([
-            "google-chrome", "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
+            "/opt/google/chrome/chrome", "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
             "--disable-gpu", "--no-proxy-server", "--ignore-certificate-errors",
             "--disable-background-networking", "--disable-breakpad", "--disable-crash-reporter",
             "--no-first-run", "--no-default-browser-check",
@@ -146,8 +146,8 @@ https://frontend.integration.test:8454 {
             "--host-resolver-rules=MAP frontend.integration.test 127.0.0.1, MAP api.integration.test 127.0.0.1",
             "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=9225",
             f"--user-data-dir={temp / 'chrome-profile'}", "about:blank",
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
-        for attempt in range(30):
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=environment)
+        for attempt in range(120):
             readiness = command(
                 "curl", "--noproxy", "*", "--fail", "--silent", "--max-time", "1", "http://127.0.0.1:9225/json/version",
                 check=False, capture=True,
@@ -156,7 +156,21 @@ https://frontend.integration.test:8454 {
                 break
             time.sleep(0.2)
         else:
-            print(json.dumps({"chrome_startup_exit_code": browser.poll()}), flush=True)
+            os.set_blocking(browser.stderr.fileno(), False)
+            diagnostic = (browser.stderr.read(65536) or b"").decode(errors="replace")
+            categories = {
+                "disk_full": "No space left on device",
+                "sandbox_unavailable": "No usable sandbox",
+                "permission_denied": "Permission denied",
+                "namespace_failure": "Failed to move to new namespace",
+                "root_sandbox": "Running as root without --no-sandbox",
+            }
+            print(json.dumps({
+                "chrome_startup_exit_code": browser.poll(),
+                "devtools_probe_exit_code": readiness.returncode,
+                "startup_failure_categories": [key for key, phrase in categories.items() if phrase in diagnostic],
+                "ram_temp_free_bytes": shutil.disk_usage(temp).free,
+            }), flush=True)
             raise RuntimeError("Chrome debugging endpoint unavailable")
         result = command(
             shutil.which("node"), str(ROOT / "browser.mjs"), capture=True, check=False, timeout=240,
@@ -206,5 +220,7 @@ finally:
             browser.wait(timeout=5)
     docker("rm", "-f", "-v", "r2-browser-https", "r2-browser-api", "r2-browser-egress", check=False)
     docker("network", "rm", "r2-browser-private", "r2-browser-internet", check=False)
+    if "temp" in globals() and temp.exists():
+        shutil.rmtree(temp)
     assert not docker("ps", "-a", "--filter", "name=r2-browser-", "--format", "{{.Names}}", capture=True).stdout.strip()
     print(json.dumps({"temporary_services_removed": True, "ram_only_metadata_destroyed": True}), flush=True)
