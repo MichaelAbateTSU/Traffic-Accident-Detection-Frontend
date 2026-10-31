@@ -80,17 +80,20 @@ export async function recoverJobMonitor({ signal } = {}) {
     throw new Error('Saved job monitor is invalid. Clear this site\'s stored monitor before submitting new jobs.');
   }
   const recovered = new Map();
-  const errors = [];
+  const errors = new Map();
   for (const id of saved.ids) {
     try {
       const { item } = await getMonitoredJob(id, { signal });
       recovered.set(id, item);
     } catch (error) {
       if (error.name === 'AbortError') throw error;
-      errors.push(`Cannot recover job ${id}: ${error.message}`);
+      const message = error.status === 404
+        ? `Job ${id} is unavailable (expired or unknown); its inference outcome is unknown. ${error.message}`
+        : `Cannot recover job ${id}: ${error.message}`;
+      errors.set(id, message);
       recovered.set(id, error.status === 404
-        ? { id, status: 'failed', error: error.message }
-        : { id, status: 'pending', monitorError: error.message });
+        ? { id, status: 'unavailable', monitorError: message }
+        : { id, status: 'pending', monitorError: message });
     }
   }
   for (const status of ['pending', 'running']) {
@@ -98,11 +101,14 @@ export async function recoverJobMonitor({ signal } = {}) {
     let more = true;
     while (more) {
       const { items, meta } = await getMonitoredJobs({ status, page, pageSize: 100, sort: 'created_at' }, { signal });
-      for (const item of items) recovered.set(item.id, item);
+      for (const item of items) {
+        recovered.set(item.id, item);
+        errors.delete(item.id);
+      }
       const pagination = meta?.pagination;
       more = pagination?.has_next ?? (pagination?.total_pages ? page < pagination.total_pages : items.length === 100);
       page++;
     }
   }
-  return { jobs: [...recovered.values()], warning: saved.warning, error: errors.join(' ') || null };
+  return { jobs: [...recovered.values()], warning: saved.warning, error: [...errors.values()].join(' ') || null };
 }

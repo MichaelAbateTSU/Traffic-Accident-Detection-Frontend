@@ -35,6 +35,10 @@ function isTerminalStatus(status) {
   return normalized === 'complete' || normalized === 'failed';
 }
 
+function needsMonitoring(status) {
+  return !isTerminalStatus(status) && String(status ?? '').toLowerCase() !== 'unavailable';
+}
+
 function isActiveStatus(status) {
   const normalized = String(status ?? '').toLowerCase();
   return normalized === 'pending' || normalized === 'running';
@@ -42,7 +46,7 @@ function isActiveStatus(status) {
 
 function normalizeMonitorJobStatus(status) {
   const normalized = String(status ?? '').toLowerCase();
-  if (['pending', 'running', 'complete', 'failed'].includes(normalized)) {
+  if (['pending', 'running', 'complete', 'failed', 'unavailable'].includes(normalized)) {
     return normalized;
   }
   return 'pending';
@@ -115,7 +119,7 @@ export default function Dashboard() {
   const [recoveryKey, setRecoveryKey] = useState(0);
   const totalFixedCameras = FIXED_CAMERA_STREAM_URLS.length;
   const pollingTimerRef = useRef(null);
-  const pollingRequestRef = useRef(null);
+  const pollingRequestsRef = useRef(new Map());
   const monitoredJobsRef = useRef([]);
   const startingJobRef = useRef(false);
   const recoveringMonitorRef = useRef(true);
@@ -144,16 +148,16 @@ export default function Dashboard() {
       clearInterval(pollingTimerRef.current);
       pollingTimerRef.current = null;
     }
-    pollingRequestRef.current?.abort();
-    pollingRequestRef.current = null;
+    for (const controller of pollingRequestsRef.current.values()) controller.abort();
+    pollingRequestsRef.current.clear();
   }, []);
 
   const refreshPendingJobs = useCallback(async () => {
-    if (pollingRequestRef.current || !monitorMountedRef.current) return;
+    if (!monitorMountedRef.current) return;
 
     const currentJobs = monitoredJobsRef.current;
     const pendingIds = currentJobs
-      .filter((jobItem) => !isTerminalStatus(jobItem.status))
+      .filter((jobItem) => needsMonitoring(jobItem.status))
       .map((jobItem) => jobItem.id)
       .filter(Boolean);
 
@@ -162,11 +166,12 @@ export default function Dashboard() {
       return;
     }
 
-    const controller = new AbortController();
-    pollingRequestRef.current = controller;
-    try {
-      await Promise.all(
-        pendingIds.map(async (jobId) => {
+    await Promise.all(
+      pendingIds.map(async (jobId) => {
+        if (pollingRequestsRef.current.has(jobId)) return;
+        const controller = new AbortController();
+        pollingRequestsRef.current.set(jobId, controller);
+        try {
           let item;
           let readError;
           try {
@@ -175,12 +180,18 @@ export default function Dashboard() {
             if (error.name === 'AbortError') return;
             readError = error;
           }
-          if (!monitorMountedRef.current || pollingRequestRef.current !== controller || controller.signal.aborted) return;
+          if (!monitorMountedRef.current || pollingRequestsRef.current.get(jobId) !== controller || controller.signal.aborted) return;
 
           const next = monitoredJobsRef.current.map((jobItem) => {
             if (jobItem.id !== jobId) return jobItem;
             if (readError) {
-              return { ...jobItem, monitorError: `Cannot refresh job ${jobId}: ${readError.message}` };
+              return {
+                ...jobItem,
+                status: readError.status === 404 ? 'unavailable' : jobItem.status,
+                monitorError: readError.status === 404
+                  ? `Job ${jobId} is unavailable (expired or unknown); its inference outcome is unknown. ${readError.message}`
+                  : `Cannot refresh job ${jobId}: ${readError.message}`,
+              };
             }
             return normalizeMonitorJob({
               ...jobItem,
@@ -193,15 +204,15 @@ export default function Dashboard() {
           monitoredJobsRef.current = next;
           setMonitoredJobs(next);
           setJobError(next.map((jobItem) => jobItem.monitorError).filter(Boolean).join(' ') || null);
-          if (next.length > 0 && next.every((jobItem) => isTerminalStatus(jobItem.status))) {
+          if (next.length > 0 && next.every((jobItem) => !needsMonitoring(jobItem.status))) {
             stopBatchPolling();
             setBatchStartError(null);
           }
-        }),
-      );
-    } finally {
-      if (pollingRequestRef.current === controller) pollingRequestRef.current = null;
-    }
+        } finally {
+          if (pollingRequestsRef.current.get(jobId) === controller) pollingRequestsRef.current.delete(jobId);
+        }
+      }),
+    );
   }, [stopBatchPolling]);
 
   useEffect(() => {
@@ -219,7 +230,7 @@ export default function Dashboard() {
         setJobSubmissionError(warning);
         setJobError(recoveryError);
         persistMonitor(recovered.map((item) => item.id), warning);
-        if (recovered.some((item) => !isTerminalStatus(item.status))) {
+        if (recovered.some((item) => needsMonitoring(item.status))) {
           stopBatchPolling();
           pollingTimerRef.current = setInterval(refreshPendingJobs, JOB_POLL_INTERVAL_MS);
           refreshPendingJobs();
@@ -274,7 +285,7 @@ export default function Dashboard() {
       setBatchStartError('Accepted job recovery must finish before starting a new submission.');
       return;
     }
-    if (startingJobRef.current || monitoredJobsRef.current.some((jobItem) => !isTerminalStatus(jobItem.status))) {
+    if (startingJobRef.current || monitoredJobsRef.current.some((jobItem) => needsMonitoring(jobItem.status))) {
       setBatchStartError('Wait for the accepted detection jobs to finish before starting another submission. Monitoring continues.');
       return;
     }
@@ -308,12 +319,18 @@ export default function Dashboard() {
           frames: mergeFrameImages([], item?.frames ?? []),
         });
         queuedResponses.push(acceptedJob);
-        persistMonitor(queuedResponses.map((job) => job.id));
         // Keep known acceptance for recovery, but do not continue a batch after navigation.
-        if (!monitorMountedRef.current) break;
+        if (!monitorMountedRef.current) {
+          const remaining = sources.length - queuedResponses.length;
+          persistMonitor(queuedResponses.map((job) => job.id), remaining > 0
+            ? `${queuedResponses.length} of ${sources.length} jobs started; submission stopped after navigation: ${remaining} sources were not submitted.`
+            : null);
+          break;
+        }
+        persistMonitor(queuedResponses.map((job) => job.id));
         monitoredJobsRef.current = [...monitoredJobsRef.current, acceptedJob];
         setMonitoredJobs(monitoredJobsRef.current);
-        if (monitoredJobsRef.current.some((jobItem) => !isTerminalStatus(jobItem.status))) {
+        if (monitoredJobsRef.current.some((jobItem) => needsMonitoring(jobItem.status))) {
           if (!pollingTimerRef.current) {
             pollingTimerRef.current = setInterval(refreshPendingJobs, JOB_POLL_INTERVAL_MS);
           }
@@ -367,6 +384,7 @@ export default function Dashboard() {
   const completedJobsCount = monitoredJobs.filter((jobItem) => isCompleteStatus(jobItem.status)).length;
   const failedJobsCount = monitoredJobs.filter((jobItem) => isFailedStatus(jobItem.status)).length;
   const activeJobsCount = monitoredJobs.filter((jobItem) => isActiveStatus(jobItem.status)).length;
+  const unavailableJobsCount = monitoredJobs.filter((jobItem) => jobItem.status === 'unavailable').length;
   const allBatchJobsComplete = monitoredJobs.length > 0 && monitoredJobs.every((jobItem) => isTerminalStatus(jobItem.status));
   const latestCompletedJob = useMemo(() => {
     const completed = monitoredJobs.filter((jobItem) => isCompleteStatus(jobItem.status));
@@ -603,6 +621,17 @@ export default function Dashboard() {
           </div>
         )}
         {monitorStorageError && <p role="alert">{monitorStorageError}</p>}
+        {unavailableJobsCount > 0 && (
+          <div role="alert">
+            <p>{unavailableJobsCount} jobs unavailable; inference outcomes are unknown, not failed. Missing records may have expired or never existed.</p>
+            <button type="button" disabled={recoveringMonitor || startingJob}
+              onClick={() => {
+                recoveringMonitorRef.current = true;
+                setRecoveringMonitor(true);
+                setRecoveryKey((key) => key + 1);
+              }}>Retry unavailable job recovery</button>
+          </div>
+        )}
 
         <p className={styles.monitorHint}>
           Jobs are queued as <strong>pending</strong>, advance to <strong>running</strong> as processing begins, then end as
@@ -620,6 +649,7 @@ export default function Dashboard() {
               <>
                 <strong>{completedJobsCount} complete, {failedJobsCount} failed, out of {monitoredJobs.length} jobs.</strong>
                 <span>{activeJobsCount} jobs still pending/running.</span>
+                {unavailableJobsCount > 0 && <span>{unavailableJobsCount} unavailable; outcomes unknown.</span>}
               </>
             ) : (
               <>
