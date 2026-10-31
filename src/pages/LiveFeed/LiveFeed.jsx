@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import CameraCard from '../../components/CameraCard/CameraCard.jsx';
 import DataState from '../../components/DataState/DataState.jsx';
 import MetaInfoPanel from '../../components/MetaInfoPanel/MetaInfoPanel.jsx';
@@ -24,18 +24,23 @@ function mapFixedCameras(statusById = new Map(), statusByStreamUrl = new Map()) 
 }
 
 export default function LiveFeed() {
-  const [cameras, setCameras] = useState([]);
+  const [cameras, setCameras] = useState(mapFixedCameras);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [meta, setMeta] = useState(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const refreshStatus = useRef(() => {});
   const [pollInterval, setPollInterval] = useState(5000);
 
   useEffect(() => {
-    const controller = new AbortController();
+    let controller;
     let mounted = true;
+    let inFlight = false;
     async function load() {
+      if (!mounted || inFlight) return;
+      inFlight = true;
+      controller = new AbortController();
+      setLoading(true);
       try {
         const { items, meta: metaValue } = await getCameraStatus({ signal: controller.signal });
         if (!mounted) return;
@@ -56,19 +61,21 @@ export default function LiveFeed() {
         setCameras(mapFixedCameras());
         setError(err.message);
       } finally {
+        inFlight = false;
         if (mounted) setLoading(false);
       }
     }
+    refreshStatus.current = load;
     load();
     return () => {
       mounted = false;
-      controller.abort();
+      controller?.abort();
     };
-  }, [refreshKey]);
+  }, []);
 
   useEffect(() => {
     if (!pollInterval) return undefined;
-    const interval = setInterval(() => setRefreshKey(value => value + 1), pollInterval);
+    const interval = setInterval(() => refreshStatus.current(), pollInterval);
     return () => clearInterval(interval);
   }, [pollInterval]);
 
@@ -98,45 +105,46 @@ export default function LiveFeed() {
             <option value={30000}>30s</option>
             <option value={0}>Manual</option>
           </select>
-          <button type="button" className={styles.refreshBtn} onClick={() => setRefreshKey((value) => value + 1)}>
+          <button type="button" className={styles.refreshBtn} onClick={() => refreshStatus.current()}>
             Refresh job status
           </button>
         </div>
       </div>
 
-      {!loading && cameras.length > 0 && (
+      {cameras.length > 0 && (
         <div className={styles.summary}>
           <span className={styles.summaryItem}>
             <span className={styles.dot} data-status="online" />
-            {onlineCount} Jobs pending/running
+            {onlineCount} Sources with latest job pending/running
           </span>
           {warningCount > 0 && (
             <span className={styles.summaryItem}>
               <span className={styles.dot} data-status="warning" />
-              {warningCount} Jobs failed
+              {warningCount} Sources with latest job failed
             </span>
           )}
           {offlineCount > 0 && (
             <span className={styles.summaryItem}>
               <span className={styles.dot} data-status="offline" />
-              {offlineCount} Jobs complete
+              {offlineCount} Sources with latest job complete
             </span>
           )}
-          <span className={styles.summaryItem}>{unknownCount} Job states unknown</span>
+          <span className={styles.summaryItem}>{unknownCount} Sources with unknown latest job state</span>
           {lastUpdatedAt && <span className={styles.summaryItem}>Updated: {formatDateTime(lastUpdatedAt)}</span>}
         </div>
       )}
 
       <DataState
-        loading={loading}
+        loading={false}
         error={null}
         isEmpty={!cameras.length}
         emptyMessage="No cameras configured."
-        onRetry={() => setRefreshKey((value) => value + 1)}
+        onRetry={() => refreshStatus.current()}
         loadingMessage="Loading camera statuses..."
         loadingVariant="skeleton"
         loadingRows={4}
       >
+        {loading && <p role="status">Refreshing job metadata; raw playback remains available.</p>}
         {error && <p role="alert">Job status refresh failed: {error}. Raw playback can still be attempted; source health is unknown.</p>}
         <div className={styles.grid}>
           {cameras.map((camera) => (

@@ -472,7 +472,7 @@ export default function Dashboard() {
             icon="CAM"
             trend={stats?.totalCameras > 0 ? 'Job-derived counts' : 'No retained job sources'}
             variant="neutral"
-            description="Distinct retained job sources with pending/running latest jobs / all retained job sources; not cameras online or raw-stream availability."
+            description="Distinct sources with any retained pending/running job / all retained job sources, even if a newer job completed; not cameras online or raw-stream availability."
           />
           <StatCard
             label="Alarm Frames Today"

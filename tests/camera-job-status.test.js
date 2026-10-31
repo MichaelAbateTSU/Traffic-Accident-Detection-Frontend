@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { componentHarness } from './componentHarness.js';
+import { componentHarness, deferred } from './componentHarness.js';
 import { cameraJobStatusLabel } from '../src/utils/cameraJobStatus.js';
 import * as formatters from '../src/utils/formatters.js';
 import * as cameras from '../src/constants/cameras.js';
@@ -66,6 +66,59 @@ test('raw feed lists all configured cameras as unknown without jobs and preserve
         if (failure) throw new Error('Status network failed');
         return { items: [] };
       } },
+    });
+
+    test('slow metadata requests survive multiple polling intervals without hiding streams or overlapping', async () => {
+      for (const lateFailure of [false, true]) {
+        const requests = [];
+        const harness = await componentHarness('../src/pages/LiveFeed/LiveFeed.jsx', {
+          '../../constants/cameras.js': cameras,
+          '../../utils/formatters.js': formatters,
+          '../../services/api.js': { getCameraStatus: ({ signal }) => {
+            const request = { ...deferred(), signal };
+            requests.push(request);
+            return request.promise;
+          } },
+        });
+        const cards = () => harness.elements.filter(n => n.type === 'CameraCard');
+        const tick = async () => {
+          for (const callback of harness.timers.values()) callback();
+          await harness.flush();
+        };
+        harness.render();
+        assert.equal(cards().length, cameras.FIXED_CAMERA_STREAM_URLS.length);
+        assert.equal(harness.elements.find(n => n.type === 'DataState').props.loading, false);
+        for (let i = 0; i < 4; i++) await tick();
+        harness.elements.find(n => n.type === 'button').props.onClick();
+        await harness.flush();
+        assert.equal(requests.length, 1);
+        assert.equal(requests[0].signal.aborted, false);
+        const source = cameras.FIXED_CAMERA_STREAM_URLS[0];
+        requests[0].resolve({ items: [{ id: cameras.getCameraIdFromStreamUrl(source), status: 'offline', streamUrl: source }] });
+        await harness.flush();
+        assert.equal(cards()[0].props.camera.status, 'offline');
+        assert.match(JSON.stringify(harness.elements), /Sources with latest job complete/);
+        await tick();
+        assert.equal(requests.length, 2);
+        await tick();
+        assert.equal(requests.length, 2);
+        requests[1].reject(new Error('Metadata unavailable'));
+        await harness.flush();
+        assert.match(JSON.stringify(harness.elements.find(n => n.props.role === 'alert')), /Metadata unavailable/);
+        assert.ok(cards().every(n => n.props.camera.status === 'unknown'));
+        assert.equal(cards().length, cameras.FIXED_CAMERA_STREAM_URLS.length);
+        await tick();
+        assert.equal(requests.length, 3);
+        const beforeUnmount = JSON.stringify(harness.elements);
+        harness.unmount();
+        assert.equal(harness.timers.size, 0);
+        assert.equal(requests[2].signal.aborted, true);
+        if (lateFailure) requests[2].reject(new Error('Late failure'));
+        else requests[2].resolve({ items: [{ id: cameras.getCameraIdFromStreamUrl(source), status: 'online' }] });
+        await harness.flush();
+        assert.equal(JSON.stringify(harness.elements), beforeUnmount);
+        assert.equal(requests.length, 3);
+      }
     });
     harness.render();
     await harness.flush();
@@ -146,5 +199,29 @@ test('dashboard zero retained sources is never all-online and counts remain job-
   assert.equal(card.props.trend, 'No retained job sources');
   assert.match(card.props.description, /not cameras online or raw-stream availability/);
   assert.doesNotMatch(JSON.stringify(harness.elements), /All online|Cameras currently online/);
+  harness.unmount();
+});
+
+test('dashboard counts a source with an older pending job even when its latest job is complete', async () => {
+  const source = cameras.FIXED_CAMERA_STREAM_URLS[0];
+  const harness = await componentHarness('../src/pages/Dashboard/Dashboard.jsx', {
+    ...common,
+    'react-router-dom': { Link: 'Link' },
+    '../../constants/cameras.js': cameras,
+    '../../services/api.js': { getJob() {}, parseMaxFrames() {}, startDetectionJob() {} },
+    '../../services/jobMonitor.js': { beginJobSubmission() {}, endJobSubmission() {}, saveJobMonitor() {}, recoverJobMonitor: async () => ({ jobs: [] }) },
+    '../../hooks/useDashboardData.js': { useDashboardData: () => ({
+      stats: { activeCameras: 1, totalCameras: 1 },
+      cameras: [{ id: 'source', streamUrl: source, status: 'offline' }],
+      jobs: [{ id: 'older', status: 'pending', videoUrl: source }, { id: 'newer', status: 'complete', videoUrl: source }],
+      incidents: [], reload() {},
+    }) },
+  }, { URL });
+  harness.render();
+  const card = harness.elements.find(n => n.type === 'StatCard' && n.props.label === 'Job Sources Pending/Running');
+  assert.equal(card.props.value, '1/1');
+  assert.match(card.props.description, /any retained pending\/running job/);
+  assert.match(card.props.description, /even if a newer job completed/);
+  assert.doesNotMatch(card.props.description, /pending\/running latest jobs/);
   harness.unmount();
 });
