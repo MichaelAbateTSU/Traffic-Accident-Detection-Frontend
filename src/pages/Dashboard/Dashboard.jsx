@@ -409,7 +409,7 @@ export default function Dashboard() {
             <IncidentDetailPanel
               incident={selectedIncident}
               onIncidentUpdated={(updated) => {
-                setSelectedIncident(updated);
+                setSelectedIncident((selected) => selected?.id === updated.id ? updated : selected);
                 reload();
               }}
             />

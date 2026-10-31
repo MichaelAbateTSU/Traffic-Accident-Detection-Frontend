@@ -35,10 +35,12 @@ export default function CameraView() {
   const [error, setError] = useState(null);
   const [playerLoading, setPlayerLoading] = useState(false);
   const [playerError, setPlayerError] = useState(null);
-  const [latestFrame, setLatestFrame] = useState(null);
-  const [latestFrameError, setLatestFrameError] = useState(null);
+  const [frameState, setFrameState] = useState({ cameraId, item: null, error: null });
+  const latestFrame = frameState.cameraId === cameraId ? frameState.item : null;
+  const latestFrameError = frameState.cameraId === cameraId ? frameState.error : null;
 
   useEffect(() => {
+    setFrameState({ cameraId, item: null, error: null });
     if (!cameraId) return undefined;
     let cancelled = false;
     const controller = new AbortController();
@@ -47,11 +49,10 @@ export default function CameraView() {
       try {
         const { item } = await getCameraLatestFrame(cameraId, { signal: controller.signal });
         if (cancelled) return;
-        setLatestFrame(item);
-        setLatestFrameError(null);
+        setFrameState({ cameraId, item, error: null });
       } catch (err) {
         if (err.name === 'AbortError' || cancelled) return;
-        setLatestFrameError(err.message);
+        setFrameState((previous) => ({ ...previous, error: err.message }));
       }
     };
 
@@ -107,15 +108,17 @@ export default function CameraView() {
   }, [cameraId, fallbackStreamUrl]);
 
   useEffect(() => {
-    setCamera((prev) => ({
-      ...prev,
-      id: cameraId,
-      name: state.name ?? prev.name ?? cameraId,
-      streamUrl: state.streamUrl ?? prev.streamUrl ?? fallbackStreamUrl,
-      status: state.status ?? prev.status ?? 'online',
-      fps: state.fps ?? prev.fps ?? null,
-      lastSeenAt: state.lastSeenAt ?? prev.lastSeenAt ?? null,
-    }));
+    setCamera((previous) => {
+      const sameCamera = String(previous.id) === cameraId ? previous : {};
+      return {
+        id: cameraId,
+        name: state.name ?? sameCamera.name ?? cameraId,
+        streamUrl: state.streamUrl ?? sameCamera.streamUrl ?? fallbackStreamUrl,
+        status: state.status ?? sameCamera.status ?? 'online',
+        fps: state.fps ?? sameCamera.fps ?? null,
+        lastSeenAt: state.lastSeenAt ?? sameCamera.lastSeenAt ?? null,
+      };
+    });
   }, [cameraId, fallbackStreamUrl, state.fps, state.lastSeenAt, state.name, state.status, state.streamUrl]);
 
   const hasStream = Boolean(camera.streamUrl);
@@ -195,6 +198,11 @@ export default function CameraView() {
 
         <aside className={styles.latestFrame} aria-label="Latest detection frame">
           <span className={styles.latestFrameTitle}>Latest detection frame</span>
+          {latestFrameError && (
+            <span className={styles.error} role="alert">
+              Latest frame refresh failed: {latestFrameError}
+            </span>
+          )}
           {latestFrame?.url ? (
             <a href={latestFrame.url} target="_blank" rel="noreferrer">
               <img src={latestFrame.url} alt={`Latest processed frame for ${camera.name ?? camera.id}`} />
