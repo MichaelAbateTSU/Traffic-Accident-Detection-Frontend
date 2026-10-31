@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import AuthenticatedImage from '../../components/AuthenticatedImage/AuthenticatedImage.jsx';
+import FrameGallery from '../../components/FrameGallery/FrameGallery.jsx';
 import StatCard from '../../components/StatCard/StatCard.jsx';
 import IncidentTable from '../../components/IncidentTable/IncidentTable.jsx';
 import AlertBanner from '../../components/AlertBanner/AlertBanner.jsx';
@@ -13,9 +13,10 @@ import DetectionSignalsChart from '../../components/charts/DetectionSignalsChart
 import StatusBadge from '../../components/StatusBadge/StatusBadge.jsx';
 import SectionCard from '../../components/SectionCard/SectionCard.jsx';
 import CameraPreviewCard from '../../components/CameraPreviewCard/CameraPreviewCard.jsx';
-import { getJob, startDetectionJob } from '../../services/api.js';
+import { getJob, parseMaxFrames, startDetectionJob } from '../../services/api.js';
+import { beginJobSubmission, endJobSubmission, recoverJobMonitor, saveJobMonitor } from '../../services/jobMonitor.js';
 import { FIXED_CAMERA_STREAM_URLS } from '../../constants/cameras.js';
-import { formatDateTime, formatPercent } from '../../utils/formatters.js';
+import { formatDateTime, formatNumber, formatPercent } from '../../utils/formatters.js';
 import { useDashboardData } from '../../hooks/useDashboardData.js';
 import styles from './Dashboard.module.css';
 
@@ -98,15 +99,27 @@ function getDetectionStatusBadge(status) {
 
 export default function Dashboard() {
   const [saveFrames, setSaveFrames] = useState(false);
+  const [maxFrames, setMaxFrames] = useState('120');
+  const [videoUrl, setVideoUrl] = useState('');
+  const [videoUrlError, setVideoUrlError] = useState(null);
+  const [frameCountError, setFrameCountError] = useState(null);
+  const [batchStartError, setBatchStartError] = useState(null);
   const [startingJob, setStartingJob] = useState(false);
   const [monitoredJobs, setMonitoredJobs] = useState([]);
   const [jobError, setJobError] = useState(null);
   const [jobSubmissionError, setJobSubmissionError] = useState(null);
   const [selectedIncident, setSelectedIncident] = useState(null);
+  const [recoveringMonitor, setRecoveringMonitor] = useState(true);
+  const [monitorRecoveryError, setMonitorRecoveryError] = useState(null);
+  const [monitorStorageError, setMonitorStorageError] = useState(null);
+  const [recoveryKey, setRecoveryKey] = useState(0);
   const totalFixedCameras = FIXED_CAMERA_STREAM_URLS.length;
   const pollingTimerRef = useRef(null);
   const refreshingJobsRef = useRef(false);
   const monitoredJobsRef = useRef([]);
+  const startingJobRef = useRef(false);
+  const recoveringMonitorRef = useRef(true);
+  const monitorMountedRef = useRef(true);
 
   const {
     stats,
@@ -160,6 +173,7 @@ export default function Dashboard() {
           }
         }),
       );
+      if (!monitorMountedRef.current) return;
 
       let allCompleteAfterRefresh = false;
       setMonitoredJobs((current) => {
@@ -181,6 +195,7 @@ export default function Dashboard() {
           };
         });
         allCompleteAfterRefresh = next.length > 0 && next.every((jobItem) => isTerminalStatus(jobItem.status));
+        monitoredJobsRef.current = next;
         return next;
       });
 
@@ -189,6 +204,7 @@ export default function Dashboard() {
 
       if (allCompleteAfterRefresh) {
         stopBatchPolling();
+        setBatchStartError(null);
       }
     } finally {
       refreshingJobsRef.current = false;
@@ -196,13 +212,77 @@ export default function Dashboard() {
   }, [stopBatchPolling]);
 
   useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+    recoveringMonitorRef.current = true;
+    setRecoveringMonitor(true);
+    setMonitorRecoveryError(null);
+    recoverJobMonitor({ signal: controller.signal })
+      .then(({ jobs: recovered, warning, error: recoveryError }) => {
+        if (!active) return;
+        monitoredJobsRef.current = recovered.map(normalizeMonitorJob);
+        setMonitoredJobs(monitoredJobsRef.current);
+        setJobSubmissionError(warning);
+        setJobError(recoveryError);
+        persistMonitor(recovered.map((item) => item.id), warning);
+        if (recovered.some((item) => !isTerminalStatus(item.status))) {
+          stopBatchPolling();
+          pollingTimerRef.current = setInterval(refreshPendingJobs, JOB_POLL_INTERVAL_MS);
+          refreshPendingJobs();
+        }
+        recoveringMonitorRef.current = false;
+        setRecoveringMonitor(false);
+      })
+      .catch((error) => {
+        if (active && error.name !== 'AbortError') {
+          setMonitorRecoveryError(`Cannot restore accepted jobs: ${error.message}. New submissions remain blocked; retry recovery.`);
+          setRecoveringMonitor(false);
+        }
+      });
     return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [recoveryKey, refreshPendingJobs, stopBatchPolling]);
+
+  function persistMonitor(ids, warning = null) {
+    try {
+      saveJobMonitor(ids, warning);
+      setMonitorStorageError(null);
+    } catch (error) {
+      setMonitorStorageError(`Cannot save job monitor for reload recovery: ${error.message}. Active jobs will still be recovered from the backend.`);
+    }
+  }
+
+  useEffect(() => {
+    monitorMountedRef.current = true;
+    return () => {
+      monitorMountedRef.current = false;
       stopBatchPolling();
     };
   }, [stopBatchPolling]);
 
-  async function handleStartJob(event) {
+  async function handleStartJob(event, sources = FIXED_CAMERA_STREAM_URLS) {
     event.preventDefault();
+    let frameCount;
+    try {
+      frameCount = parseMaxFrames(maxFrames);
+    } catch (err) {
+      setFrameCountError(err.message);
+      return;
+    }
+    setFrameCountError(null);
+    if (recoveringMonitorRef.current) {
+      setBatchStartError('Accepted job recovery must finish before starting a new submission.');
+      return;
+    }
+    if (startingJobRef.current || monitoredJobsRef.current.some((jobItem) => !isTerminalStatus(jobItem.status))) {
+      setBatchStartError('Wait for the accepted detection jobs to finish before starting another submission. Monitoring continues.');
+      return;
+    }
+    setBatchStartError(null);
+    startingJobRef.current = true;
+    beginJobSubmission();
 
     setStartingJob(true);
     stopBatchPolling();
@@ -213,10 +293,11 @@ export default function Dashboard() {
 
     const queuedResponses = [];
     try {
-      for (const streamUrl of FIXED_CAMERA_STREAM_URLS) {
+      for (const streamUrl of sources) {
         const { item } = await startDetectionJob({
           stream_url: streamUrl,
           save_frames: saveFrames,
+          max_frames: frameCount,
         });
         const id = item?.id ?? item?.jobId ?? item?.job_id;
         if (!id) {
@@ -226,9 +307,11 @@ export default function Dashboard() {
           normalizeMonitorJob({
             ...item,
             id,
+            maxFrames: item.maxFrames ?? frameCount,
             frames: mergeFrameImages([], item?.frames ?? []),
           }),
         );
+        persistMonitor(queuedResponses.map((job) => job.id));
       }
 
       if (!queuedResponses.length) {
@@ -236,23 +319,51 @@ export default function Dashboard() {
       }
     } catch (err) {
       console.error(err);
-      setJobSubmissionError(queuedResponses.length
-        ? `${queuedResponses.length} of ${totalFixedCameras} jobs started; submission stopped: ${err.message}`
-        : err.message);
+      const warning = queuedResponses.length
+        ? `${queuedResponses.length} of ${sources.length} jobs started; submission stopped: ${err.message}`
+        : err.message;
+      setJobSubmissionError(warning);
+      persistMonitor(queuedResponses.map((job) => job.id), warning);
     } finally {
       if (queuedResponses.length) {
         monitoredJobsRef.current = queuedResponses;
         setMonitoredJobs(queuedResponses);
-        if (queuedResponses.some((jobItem) => !isTerminalStatus(jobItem.status))) {
+        if (monitorMountedRef.current && queuedResponses.some((jobItem) => !isTerminalStatus(jobItem.status))) {
           pollingTimerRef.current = setInterval(() => {
             refreshPendingJobs();
           }, JOB_POLL_INTERVAL_MS);
           refreshPendingJobs();
         }
-        reload();
+
+        if (monitorMountedRef.current) reload();
       }
       setStartingJob(false);
+      startingJobRef.current = false;
+      endJobSubmission();
     }
+  }
+
+  async function handleVideoJob(event) {
+    event.preventDefault();
+    const source = videoUrl.trim();
+    try {
+      const url = new URL(source);
+      if (url.protocol !== 'https:' || url.username || url.password || url.hash) {
+        throw new Error('Use an HTTPS video URL without credentials or a fragment.');
+      }
+    } catch (error) {
+      setVideoUrlError(`Invalid video source: ${error.message}`);
+      return;
+    }
+    setVideoUrlError(null);
+    await handleStartJob(event, [source]);
+  }
+
+  function selectBenchmark(filename) {
+    setVideoUrl(`https://media.githubusercontent.com/media/accidentbench/accidentbench.github.io/main/assets/videos/real-world/${filename}%20(3).mp4`);
+    setMaxFrames('200');
+    setSaveFrames(true);
+    setVideoUrlError(null);
   }
 
   const activeIncidents = useMemo(() => incidents.filter((incident) => !incident.resolved), [incidents]);
@@ -326,7 +437,7 @@ export default function Dashboard() {
     <main className={styles.page}>
       <div className={styles.header}>
         <h1 className={styles.title}>Operations Dashboard</h1>
-        <span className={styles.subtitle}>Real-time traffic incident monitoring and detection confidence overview</span>
+        <span className={styles.subtitle}>Traffic incident monitoring and heuristic accident scores (0-1), not calibrated probabilities</span>
       </div>
 
       {health && (
@@ -420,21 +531,82 @@ export default function Dashboard() {
 
       <SectionCard
         title="Detection Job Monitor"
-        description={`One detection job is queued for each of ${totalFixedCameras} fixed cameras, then each pending/running job is refreshed every second.`}
+        description={`Submit a batch across ${totalFixedCameras} fixed cameras or one approved HTTPS video. Each pending/running job is refreshed every second.`}
       >
-        <form className={styles.jobForm} onSubmit={handleStartJob}>
+        <form className={styles.jobForm} onSubmit={(event) => handleStartJob(event)}>
+          <label className={styles.checkboxLabel} htmlFor="maxFrames">
+            Frames per source (1-300)
+            <input
+              id="maxFrames"
+              type="number"
+              min="1"
+              max="300"
+              step="1"
+              required
+              value={maxFrames}
+              disabled={startingJob}
+              aria-invalid={Boolean(frameCountError)}
+              aria-describedby="frame-count-hint"
+              onChange={(event) => {
+                setMaxFrames(event.target.value);
+                setFrameCountError(null);
+              }}
+            />
+          </label>
           <label className={styles.checkboxLabel}>
             <input
               type="checkbox"
               checked={saveFrames}
+              disabled={startingJob}
               onChange={(event) => setSaveFrames(event.target.checked)}
             />
             Save frames
           </label>
-          <button type="submit" className={styles.retryBtn} disabled={startingJob}>
-            {startingJob ? `Queueing ${totalFixedCameras} detection jobs...` : `Run detection across ${totalFixedCameras} cameras`}
+          <button type="submit" className={styles.retryBtn} disabled={startingJob || activeJobsCount > 0 || recoveringMonitor || Boolean(monitorRecoveryError)}>
+            {startingJob ? 'Submitting detection jobs...' : `Run detection across ${totalFixedCameras} cameras`}
           </button>
         </form>
+        <section aria-label="Single video detection">
+          <h3>Run one approved HTTPS video</h3>
+          <p>Uses the Frames per source limit above as the frame limit for this video, and the same Save frames setting.
+            The operator must explicitly approve the exact source URL on the backend allowlist before running it.
+            Backend rejection is shown as a job submission error; this app never bypasses approval.</p>
+          <form className={styles.jobForm} onSubmit={handleVideoJob}>
+            <label htmlFor="videoSource">Approved HTTPS video URL</label>
+            <input id="videoSource" type="url" required value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} />
+            <button type="submit" disabled={startingJob || activeJobsCount > 0 || recoveringMonitor || Boolean(monitorRecoveryError)}>
+              {startingJob ? 'Submission in progress...' : 'Run single video'}
+            </button>
+          </form>
+          {videoUrlError && <p role="alert">{videoUrlError}</p>}
+          <p>Optional examples from <a href="https://accidentbench.github.io/" target="_blank" rel="noreferrer">ACCIDENT benchmark</a>.
+            Reported license: CC BY-NC-SA 4.0, noncommercial use only. Media stays on the source host; no media is bundled.
+            Selecting an example sets 200 decoded frames and Save frames, but does not submit or approve it.</p>
+          <button type="button" onClick={() => selectBenchmark('tbone')}>Select tbone (3) example</button>
+          <a href="https://media.githubusercontent.com/media/accidentbench/accidentbench.github.io/main/assets/videos/real-world/tbone%20(3).mp4" target="_blank" rel="noreferrer">Original tbone (3) source</a>
+          <p>CSV onset: frame 18, 0.72 s. The website label differs from the CSV category; index conventions and detector accuracy are not verified.</p>
+          <button type="button" onClick={() => selectBenchmark('single')}>Select single (3) example</button>
+          <a href="https://media.githubusercontent.com/media/accidentbench/accidentbench.github.io/main/assets/videos/real-world/single%20(3).mp4" target="_blank" rel="noreferrer">Original single (3) source</a>
+          <p>CSV onset: frame 148, 6.644433 s. At least 149 decoded frames are needed; the example uses 200.
+            CSV source timing is distinct from the processing elapsed time displayed in results. Saved annotated frames and heuristic scores do not establish accuracy.</p>
+        </section>
+        <p id="frame-count-hint" className={styles.monitorHint}>
+          Each source job processes up to the selected frame count (default 120), not continuous monitoring.
+          Larger counts take longer; pending and running jobs continue to refresh until they finish.
+        </p>
+        {frameCountError && <p role="alert">{frameCountError}</p>}
+        {activeJobsCount > 0 && (
+          <p role="status">Another submission can start after all accepted detection jobs finish. Monitoring continues for pending and running jobs.</p>
+        )}
+        {batchStartError && <p role="alert">{batchStartError}</p>}
+        {recoveringMonitor && <p role="status">Restoring accepted detection jobs before allowing new submissions...</p>}
+        {monitorRecoveryError && (
+          <div role="alert">
+            <p>{monitorRecoveryError}</p>
+            <button type="button" onClick={() => setRecoveryKey((key) => key + 1)}>Retry job recovery</button>
+          </div>
+        )}
+        {monitorStorageError && <p role="alert">{monitorStorageError}</p>}
 
         <p className={styles.monitorHint}>
           Jobs are queued as <strong>pending</strong>, advance to <strong>running</strong> as processing begins, then end as
@@ -455,11 +627,13 @@ export default function Dashboard() {
               </>
             ) : (
               <>
-                <strong>All {monitoredJobs.length} detection jobs completed.</strong>
+                <strong>All {monitoredJobs.length} detection jobs finished: {completedJobsCount} complete, {failedJobsCount} failed.</strong>
                 <span>
-                  {accidentJobsCount === 0
+                  {failedJobsCount > 0
+                    ? 'Detection results are incomplete because some detection jobs failed.'
+                    : accidentJobsCount === 0
                     ? '0 accidents detected.'
-                    : `${accidentJobsCount} camera${accidentJobsCount > 1 ? 's' : ''} reported accident events.`}
+                    : `${accidentJobsCount} detection job${accidentJobsCount > 1 ? 's' : ''} reported accident events.`}
                 </span>
               </>
             )}
@@ -482,45 +656,19 @@ export default function Dashboard() {
             <h3 className={styles.framesTitle}>
               Frame Images - Job {latestJobWithFrames.id} ({latestJobWithFrames.frames.length})
             </h3>
-            <div className={styles.framesList}>
-              {latestJobWithFrames.frames.map((frame) => (
-                <article key={frame.frameIndex} className={styles.frameCard}>
-                  <div className={styles.frameHeader}>Frame {frame.frameIndex}</div>
-                  <div className={styles.frameGrid}>
-                    <figure>
-                      <figcaption>Original</figcaption>
-                      {frame.capture ? (
-                        <AuthenticatedImage src={frame.capture} alt={`Frame ${frame.frameIndex} original`} loading="lazy" openLink />
-                      ) : <div>No image</div>}
-                    </figure>
-                    <figure>
-                      <figcaption>Annotated</figcaption>
-                      {frame.captureAnnotated ? (
-                        <AuthenticatedImage src={frame.captureAnnotated} alt={`Frame ${frame.frameIndex} annotated`} loading="lazy" openLink />
-                      ) : <div>No image</div>}
-                    </figure>
-                    <figure>
-                      <figcaption>Pipeline Output</figcaption>
-                      {frame.pipelineOutput ? (
-                        <AuthenticatedImage src={frame.pipelineOutput} alt={`Frame ${frame.frameIndex} pipeline output`} loading="lazy" openLink />
-                      ) : <div>No image</div>}
-                    </figure>
-                  </div>
-                </article>
-              ))}
-            </div>
+            <FrameGallery frames={latestJobWithFrames.frames} jobId={latestJobWithFrames.id} />
           </div>
         )}
 
         {latestCompletedJob && (
           <p className={styles.sectionMeta}>
             Latest completed job (<strong>{latestCompletedJob.id}</strong>) returned <strong>{latestCompletedEventCount}</strong> events.
-            Peak confidence: <strong>{formatPercent(latestCompletedJob.peakConfidence, 2)}</strong>.
+            Peak heuristic accident score (0-1): <strong>{formatNumber(latestCompletedJob.peakConfidence, 2)}</strong>.
           </p>
         )}
       </SectionCard>
 
-      <SectionCard title="Detection Analytics" description="Confidence evolution and supporting signal strengths from the latest completed run">
+      <SectionCard title="Detection Analytics" description="Smoothed heuristic accident scores and supporting signals, not calibrated probabilities">
         <div className={styles.chartsGrid}>
           <ConfidenceTrendChart events={detections} />
           <DetectionSignalsChart signalValues={topSignals} />

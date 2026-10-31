@@ -1,5 +1,5 @@
-import AuthenticatedImage from '../AuthenticatedImage/AuthenticatedImage.jsx';
-import { formatDateTime, formatPercent } from '../../utils/formatters.js';
+import FrameGallery from '../FrameGallery/FrameGallery.jsx';
+import { formatDateTime, formatNumber } from '../../utils/formatters.js';
 import StatusBadge from '../StatusBadge/StatusBadge.jsx';
 import styles from './JobStatusCard.module.css';
 
@@ -18,29 +18,6 @@ function getDisplayStatus(status) {
   if (normalized === 'running') return 'in-progress';
   if (normalized === 'pending') return 'pending';
   return status ?? '—';
-}
-
-function FrameImageTile({ label, src, alt }) {
-  const hasImage = Boolean(src);
-
-  return (
-    <div className={styles.frameTile}>
-      <div className={styles.frameTileLabelRow}>
-        <span className={styles.frameTileLabel}>{label}</span>
-      </div>
-      {hasImage ? (
-        <AuthenticatedImage
-          src={src}
-          alt={alt}
-          className={styles.frameTileImage}
-          loading="lazy"
-          openLink
-        />
-      ) : (
-        <div className={styles.frameTileFallback}>Unavailable</div>
-      )}
-    </div>
-  );
 }
 
 function formatBoundingBox(boundingBox) {
@@ -81,11 +58,12 @@ export default function JobStatusCard({ job }) {
         <span><strong>Max frames:</strong> {job.maxFrames ?? '—'}</span>
         <span><strong>Save frames:</strong> {job.saveFrames == null ? '—' : job.saveFrames ? 'Yes' : 'No'}</span>
         <span className={accidentClassName}><strong>Accident detected:</strong> {accidentLabel}</span>
-        <span><strong>Peak confidence:</strong> {formatPercent(job.peakConfidence, 2)}</span>
+        <span><strong>Peak heuristic accident score (0-1):</strong> {formatNumber(job.peakConfidence, 2)}</span>
         <span><strong>Events:</strong> {eventsCount}</span>
         <span><strong>Created:</strong> {formatDateTime(job.createdAt)}</span>
         <span><strong>Completed:</strong> {formatDateTime(job.completedAt)}</span>
       </div>
+      <p>Accident scores are smoothed weighted heuristics, not calibrated probabilities or YOLO object-detection confidence.</p>
       {job.streamUrl && (
         <a href={job.streamUrl} target="_blank" rel="noreferrer" className={styles.link}>
           Open stream
@@ -94,28 +72,7 @@ export default function JobStatusCard({ job }) {
       <section className={styles.framesSection} aria-label="Job frame images">
         <div className={styles.sectionTitle}>Frame Images</div>
         {frames.length > 0 ? (
-          frames.map((frame) => (
-            <div key={frame.frameIndex} className={styles.frameRow}>
-              <div className={styles.frameIndex}>Frame #{frame.frameIndex}</div>
-              <div className={styles.frameTriplet}>
-                <FrameImageTile
-                  label="Original"
-                  src={frame.capture}
-                  alt={`Frame ${frame.frameIndex} original`}
-                />
-                <FrameImageTile
-                  label="Annotated"
-                  src={frame.captureAnnotated}
-                  alt={`Frame ${frame.frameIndex} annotated`}
-                />
-                <FrameImageTile
-                  label="Pipeline Output"
-                  src={frame.pipelineOutput}
-                  alt={`Frame ${frame.frameIndex} pipeline output`}
-                />
-              </div>
-            </div>
-          ))
+          <FrameGallery frames={frames} jobId={job.id} />
         ) : (
           <div className={styles.emptyState}>No frame images returned yet.</div>
         )}
@@ -127,10 +84,10 @@ export default function JobStatusCard({ job }) {
             {job.events.map((eventItem, index) => (
               <div key={`${eventItem.incidentId ?? 'event'}-${eventItem.frameIdx ?? index}`} className={styles.eventCard}>
                 <span><strong>Frame:</strong> {eventItem.frameIdx ?? '—'}</span>
-                <span><strong>Timestamp:</strong> {eventItem.timestampSec ?? '—'}s</span>
+                <span><strong>Processing elapsed time:</strong> {eventItem.timestampSec ?? '—'}s (wall-clock since job start, not source-video time)</span>
                 <span><strong>Detected:</strong> {eventItem.accidentDetected == null ? '—' : eventItem.accidentDetected ? 'Yes' : 'No'}</span>
-                <span><strong>Confidence:</strong> {formatPercent(eventItem.confidenceScore, 2)}</span>
-                <span><strong>Raw score:</strong> {formatPercent(eventItem.rawScore, 2)}</span>
+                <span><strong>Heuristic accident score (0-1):</strong> {formatNumber(eventItem.confidenceScore, 2)}</span>
+                <span><strong>Raw heuristic score (0-1):</strong> {formatNumber(eventItem.rawScore, 2)}</span>
                 <span><strong>Bounding box:</strong> {formatBoundingBox(eventItem.boundingBox)}</span>
                 <span>
                   <strong>Tracks:</strong>{' '}

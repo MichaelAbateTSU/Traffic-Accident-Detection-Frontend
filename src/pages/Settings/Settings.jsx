@@ -145,7 +145,7 @@ export default function Settings() {
 
           <div className={styles.fieldGroup}>
             <label htmlFor="alertThreshold" className={styles.label}>
-              Alert Confidence Threshold ({(Number(form.alertThreshold) * 100).toFixed(0)}%)
+              Heuristic Accident Score Threshold ({Number(form.alertThreshold).toFixed(2)} on a 0-1 scale)
             </label>
             <input
               id="alertThreshold"
@@ -159,11 +159,12 @@ export default function Settings() {
               onChange={handleChange}
             />
             <div className={styles.rangeLabels}>
-              <span>50%</span>
-              <span>100%</span>
+              <span>0.50</span>
+              <span>1.00</span>
             </div>
             <span className={styles.hint}>
-              Only incidents with a YOLO confidence above this threshold will trigger alerts.
+              Saved browser preference for the heuristic accident score, not a calibrated probability or
+              YOLO object-detection confidence. This preference does not change backend scoring or detection thresholds.
             </span>
           </div>
 

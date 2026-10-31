@@ -3,7 +3,7 @@ import test from 'node:test';
 import { componentHarness, deferred } from './componentHarness.js';
 import { FIXED_CAMERA_STREAM_URLS } from '../src/constants/cameras.js';
 
-const formatters = { formatDateTime: String, formatPercent: String };
+const formatters = { formatDateTime: String, formatNumber: String, formatPercent: String };
 const incidentA = { id: 'A', cameraId: 'camera-A', note: 'note A', resolved: false, status: 'active' };
 const incidentB = { id: 'B', cameraId: 'camera-B', note: 'note B', resolved: false, status: 'active' };
 
@@ -123,7 +123,8 @@ test('Dashboard stale update refreshes the list without replacing a new selectio
     'react-router-dom': { Link: 'Link' },
     '../../constants/cameras.js': { FIXED_CAMERA_STREAM_URLS },
     '../../utils/formatters.js': formatters,
-    '../../services/api.js': { getJob() {}, startDetectionJob() {} },
+    '../../services/api.js': { getJob() {}, startDetectionJob() {}, parseMaxFrames() {} },
+    '../../services/jobMonitor.js': { beginJobSubmission() {}, endJobSubmission() {}, recoverJobMonitor: async () => ({ jobs: [] }), saveJobMonitor() {} },
     '../../hooks/useDashboardData.js': {
       useDashboardData: () => ({
         stats: null, incidents: [incidentA, incidentB], cameras: [], jobs: [],

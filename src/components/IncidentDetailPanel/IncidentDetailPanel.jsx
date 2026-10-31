@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import DetectionSignalsChart from '../charts/DetectionSignalsChart.jsx';
 import StatusBadge from '../StatusBadge/StatusBadge.jsx';
 import { updateIncidentStatus } from '../../services/api.js';
-import { formatDateTime, formatPercent } from '../../utils/formatters.js';
+import { formatDateTime, formatNumber } from '../../utils/formatters.js';
 import styles from './IncidentDetailPanel.module.css';
 
 const NOTE_MAX_LENGTH = 500;
@@ -78,14 +78,15 @@ export default function IncidentDetailPanel({ incident, onIncidentUpdated }) {
         <span><strong>Detected:</strong> {formatDateTime(current.detectedAt)}</span>
         <span><strong>Resolved at:</strong> {current.resolvedAt ? formatDateTime(current.resolvedAt) : '—'}</span>
         <span><strong>Frame index:</strong> {current.frameIdx ?? '—'}</span>
-        <span><strong>Timestamp sec:</strong> {current.timestampSec ?? '—'}</span>
-        <span><strong>Confidence:</strong> {formatPercent(current.confidenceScore, 2)}</span>
-        <span><strong>Raw score:</strong> {formatPercent(current.rawScore, 2)}</span>
+        <span><strong>Processing elapsed time:</strong> {current.timestampSec ?? '—'}s (wall-clock since job start, not source-video time)</span>
+        <span><strong>Heuristic accident score (0-1):</strong> {formatNumber(current.confidenceScore, 2)}</span>
+        <span><strong>Raw heuristic score (0-1):</strong> {formatNumber(current.rawScore, 2)}</span>
         <span><strong>Tracks:</strong> {current.involvedTrackIds?.join(', ') || '—'}</span>
         <span><strong>Job status:</strong> <StatusBadge status={current.jobStatus ?? 'idle'} label={current.jobStatus ?? 'idle'} /></span>
         <span><strong>Created at:</strong> {formatDateTime(current.createdAt)}</span>
         <span><strong>Completed at:</strong> {formatDateTime(current.completedAt)}</span>
       </div>
+      <p>Accident scores are smoothed weighted heuristics, not calibrated probabilities or YOLO object-detection confidence.</p>
       <p className={styles.box}><strong>Bounding box:</strong> {boxText(current.boundingBox)}</p>
       {current.streamUrl && (
         <a href={current.streamUrl} target="_blank" rel="noreferrer" className={styles.link}>

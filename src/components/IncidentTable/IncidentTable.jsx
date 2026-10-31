@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { formatDateTime, formatPercent } from '../../utils/formatters.js';
+import { formatDateTime, formatNumber } from '../../utils/formatters.js';
 import StatusBadge from '../StatusBadge/StatusBadge.jsx';
 import AuthenticatedImage from '../AuthenticatedImage/AuthenticatedImage.jsx';
 import styles from './IncidentTable.module.css';
@@ -85,6 +85,7 @@ export default function IncidentTable({
 
   return (
     <div className={styles.wrapper}>
+      <p>Heuristic accident scores range from 0 to 1; they are not calibrated probabilities.</p>
       <table className={styles.table}>
         <thead>
           <tr>
@@ -98,9 +99,9 @@ export default function IncidentTable({
               Type <SortIcon col="type" />
             </th>
             <th className={[styles.th, styles.sortable].join(' ')} onClick={() => handleSort('confidence')}>
-              Confidence <SortIcon col="confidence" />
+              Heuristic accident score (0-1) <SortIcon col="confidence" />
             </th>
-            {!compact && <th className={styles.th}>Raw Score</th>}
+            {!compact && <th className={styles.th}>Raw heuristic score (0-1)</th>}
             <th className={styles.th}>Status</th>
           </tr>
         </thead>
@@ -154,7 +155,7 @@ export default function IncidentTable({
               <td className={styles.td}>
                 <div className={styles.confWrap}>
                   <span className={[styles.confidence, confidenceClass(getIncidentConfidence(incident))].join(' ')}>
-                    {formatPercent(getIncidentConfidence(incident), 1)}
+                    {formatNumber(getIncidentConfidence(incident), 2)}
                   </span>
                   <StatusBadge
                     status={getIncidentConfidence(incident) >= CONFIDENCE_THRESHOLD_MED ? 'warning' : 'resolved'}
@@ -164,7 +165,7 @@ export default function IncidentTable({
               </td>
               {!compact && (
                 <td className={styles.td}>
-                  {formatPercent(incident.rawScore, 1)}
+                  {formatNumber(incident.rawScore, 2)}
                 </td>
               )}
               <td className={styles.td}>
